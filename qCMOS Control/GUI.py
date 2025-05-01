@@ -1,8 +1,8 @@
 import tkinter as tk
 from tkinter import StringVar, OptionMenu, Checkbutton, Label, Entry, Button, Scale, Frame, LabelFrame
 from dcam import Dcamapi, Dcam, DCAMERR
-from camera_params import CAMERA_PARAMS
-import GPS_time  # Importing the GPS_time module
+from camera_params import CAMERA_PARAMS, DISPLAY_PARAMS
+# import GPS_time  # Importing the GPS_time module
 import threading
 import time
 import numpy as np
@@ -143,7 +143,10 @@ class CameraThread(threading.Thread):
     def set_property(self, prop_name, value):
         if prop_name in CAMERA_PARAMS:
             print(f"Setting property: {prop_name} = {value}")
-            self.dcam.prop_setvalue(CAMERA_PARAMS[prop_name], value)
+            set_success = self.dcam.prop_setvalue(CAMERA_PARAMS[prop_name], value)
+            if set_success is False:
+                raise Exception(f"Failed to set property {prop_name}: {self.dcam.lasterr()}")
+            print(value, set_success, self.dcam.prop_getvalue(CAMERA_PARAMS[prop_name]))
             self.update_camera_params()
             # Track the modified parameter in the dictionary
             self.modified_params[prop_name] = value
@@ -158,7 +161,7 @@ class CameraThread(threading.Thread):
     def start_capture(self):
         print("Starting capture...")
         # Clear the GPS timestamp buffer before starting a new capture
-        GPS_time.clear_buffer()
+        # GPS_time.clear_buffer()
 
         # Ensure the camera is not capturing before starting a new capture session
         if self.capturing:
@@ -214,7 +217,7 @@ class CameraThread(threading.Thread):
 
                     # Fetch the GPS timestamp only once at the start of the capture sequence
                     if self.first_frame:
-                        self.start_time = GPS_time.get_first_timestamp()
+                        # self.start_time = GPS_time.get_first_timestamp()
                         self.first_frame = False  # Prevent further updates
 
                     # Increment the frame index
@@ -349,7 +352,7 @@ class CameraGUI(tk.Tk):
         self.max_val = tk.StringVar(value="200")  # Initial max percentile set to 200%
 
         self.title("Camera Parameters")
-        self.geometry("1000x1400")  # Adjust window size to tighten the layout
+        self.geometry("1000x1000")  # Adjust window size to tighten the layout
 
         # GUI code snippet
         self.main_frame = tk.Frame(self)
@@ -360,7 +363,7 @@ class CameraGUI(tk.Tk):
 
         # LabelFrame for Camera Parameters
         camera_params_frame = LabelFrame(self.main_frame, text="Camera Parameters", padx=5, pady=5)
-        camera_params_frame.grid(row=0, column=0, rowspan=5, sticky='nsew')
+        camera_params_frame.grid(row=0, column=0, rowspan=10, sticky='nsew')
         self.camera_status = tk.Label(camera_params_frame, text="", justify=tk.LEFT, anchor="w", width=60, height=80, wraplength=400)
         self.camera_status.pack(fill='both', expand=True)
 
@@ -373,10 +376,11 @@ class CameraGUI(tk.Tk):
         camera_controls_frame.grid(row=0, column=1, sticky='n')
 
         Label(camera_controls_frame, text="Exposure Time (ms):").grid(row=0, column=0)
-        self.exposure_time_entry = Entry(camera_controls_frame)
-        self.exposure_time_entry.insert(0, "200")
+        self.exposure_time_var = tk.DoubleVar()
+        self.exposure_time_var.set(200)
+        self.exposure_time_var.trace_add("write", self.update_exposure_time)
+        self.exposure_time_entry = Entry(camera_controls_frame, textvariable=self.exposure_time_var)
         self.exposure_time_entry.grid(row=0, column=1)
-        self.exposure_time_entry.bind("<Return>", self.update_exposure_time)
 
         self.save_data_var = tk.BooleanVar()
         self.save_data_checkbox = Checkbutton(camera_controls_frame, text="Save Data to Disk", variable=self.save_data_var)
@@ -397,11 +401,11 @@ class CameraGUI(tk.Tk):
         self.object_name_entry.grid(row=4, column=1)
 
         Label(camera_controls_frame, text="Frames per Datacube").grid(row=5, column=0)
-        self.cube_size_entry = Entry(camera_controls_frame)
-        self.batch_size = 100
-        self.cube_size_entry.insert(0, str(self.batch_size))
+        self.cube_size_var = tk.IntVar()
+        self.cube_size_var.set(100)
+        self.cube_size_var.trace_add("write", self.update_batch_size)
+        self.cube_size_entry = Entry(camera_controls_frame, textvariable=self.cube_size_var)
         self.cube_size_entry.grid(row=5, column=1)
-        self.cube_size_entry.bind("<Return>", self.update_batch_size)
 
         # Camera Settings
         camera_settings_frame = LabelFrame(self.main_frame, text="Camera Settings", padx=5, pady=5)
@@ -443,36 +447,40 @@ class CameraGUI(tk.Tk):
         self.subarray_mode_menu.grid(row=0, column=1)
 
         Label(subarray_controls_frame, text="Subarray HPOS:").grid(row=1, column=0)
-        self.subarray_hpos_entry = Entry(subarray_controls_frame)
+        self.subarray_hpos_var = tk.IntVar()
+        self.subarray_hpos_var.set(0)
+        self.subarray_hpos_var.trace_add("write", self.update_subarray)
+        self.subarray_hpos_entry = Entry(subarray_controls_frame, textvariable=self.subarray_hpos_var)
         self.subarray_hpos_entry.grid(row=1, column=1)
-        self.subarray_hpos_entry.insert(0, "0.0")  # Insert default value here
         self.subarray_hpos_entry.config(state='disabled')  # Disable after inserting value
-        self.subarray_hpos_entry.bind("<Return>", self.update_subarray)
-        self.subarray_hpos_entry.bind("<FocusOut>", self.update_subarray)
 
         Label(subarray_controls_frame, text="Subarray HSIZE:").grid(row=2, column=0)
-        self.subarray_hsize_entry = Entry(subarray_controls_frame)
+        self.subarray_hsize_var = tk.IntVar()
+        self.subarray_hsize_var.set(4096)
+        self.subarray_hsize_var.trace_add("write", self.update_subarray)
+        self.subarray_hsize_entry = Entry(subarray_controls_frame, textvariable=self.subarray_hsize_var)
         self.subarray_hsize_entry.grid(row=2, column=1)
-        self.subarray_hsize_entry.insert(0, "4096.0")  # Insert default value here
         self.subarray_hsize_entry.config(state='disabled')  # Disable after inserting value
-        self.subarray_hsize_entry.bind("<Return>", self.update_subarray)
-        self.subarray_hsize_entry.bind("<FocusOut>", self.update_subarray)
 
         Label(subarray_controls_frame, text="Subarray VPOS:").grid(row=3, column=0)
-        self.subarray_vpos_entry = Entry(subarray_controls_frame)
+        self.subarray_vpos_var = tk.IntVar()
+        self.subarray_vpos_var.set(0)
+        self.subarray_vpos_var.trace_add("write", self.update_subarray)
+        self.subarray_vpos_entry = Entry(subarray_controls_frame, textvariable=self.subarray_vpos_var)
         self.subarray_vpos_entry.grid(row=3, column=1)
-        self.subarray_vpos_entry.insert(0, "0.0")  # Insert default value here
         self.subarray_vpos_entry.config(state='disabled')  # Disable after inserting value
-        self.subarray_vpos_entry.bind("<Return>", self.update_subarray)
-        self.subarray_vpos_entry.bind("<FocusOut>", self.update_subarray)
 
         Label(subarray_controls_frame, text="Subarray VSIZE:").grid(row=4, column=0)
-        self.subarray_vsize_entry = Entry(subarray_controls_frame)
+        self.subarray_vsize_var = tk.IntVar()
+        self.subarray_vsize_var.set(2304)
+        self.subarray_vsize_var.trace_add("write", self.update_subarray)
+        self.subarray_vsize_entry = Entry(subarray_controls_frame, textvariable=self.subarray_vsize_var)
         self.subarray_vsize_entry.grid(row=4, column=1)
-        self.subarray_vsize_entry.insert(0, "2304.0")  # Insert default value here
         self.subarray_vsize_entry.config(state='disabled')  # Disable after inserting value
-        self.subarray_vsize_entry.bind("<Return>", self.update_subarray)
-        self.subarray_vsize_entry.bind("<FocusOut>", self.update_subarray)
+
+        # Add text noting that values will be rounded to nearest factor of 4
+        subarray_note = "Note: Values will be rounded to nearest factor of 4"
+        Label(subarray_controls_frame, text=subarray_note).grid(row=5, column=0, columnspan=2)
 
         # Advanced Controls
         advanced_controls_frame = LabelFrame(self.main_frame, text="Advanced Controls", padx=5, pady=5)
@@ -483,11 +491,11 @@ class CameraGUI(tk.Tk):
         self.framebundle_checkbox.grid(row=0, column=0, columnspan=2)
 
         Label(advanced_controls_frame, text="Frames Per Bundle:").grid(row=1, column=0)
-        self.frames_per_bundle_entry = Entry(advanced_controls_frame)
-        self.frames_per_bundle_entry.insert(0, "100")
+        self.frames_per_bundle_var = tk.IntVar()
+        self.frames_per_bundle_var.set(100)
+        self.frames_per_bundle_var.trace_add("write", self.update_frames_per_bundle)
+        self.frames_per_bundle_entry = Entry(advanced_controls_frame, textvariable=self.frames_per_bundle_var)
         self.frames_per_bundle_entry.grid(row=1, column=1)
-        self.frames_per_bundle_entry.bind("<Return>", self.update_frames_per_bundle)
-        self.frames_per_bundle_entry.bind("<FocusOut>", self.update_frames_per_bundle)
 
         # Display Controls with side-by-side layout for Min and Max Percentile
         display_controls_frame = LabelFrame(self.main_frame, text="Display Controls", padx=5, pady=5)
@@ -495,14 +503,13 @@ class CameraGUI(tk.Tk):
 
         Label(display_controls_frame, text="Min Count:").grid(row=0, column=0)
         self.min_entry = Entry(display_controls_frame, textvariable=self.min_val)
-        # self.min_entry.insert(0, "0")
         self.min_entry.grid(row=0, column=1)
         # self.min_slider = Scale(display_controls_frame, from_=0, to=100, orient='horizontal', variable=self.min_val)
         # self.min_slider.grid(row=0, column=1)
 
         Label(display_controls_frame, text="Max Count:").grid(row=0, column=2)
         self.max_entry = Entry(display_controls_frame, textvariable=self.max_val)
-        # self.max_entry.insert(0, "200")
+        self.max_val.trace_add("write", self.refresh_frame_display)
         self.max_entry.grid(row=0, column=3)
         # self.max_slider = Scale(display_controls_frame, from_=0, to=200, orient='horizontal', variable=self.max_val)
         # self.max_slider.grid(row=0, column=3)
@@ -525,10 +532,12 @@ class CameraGUI(tk.Tk):
         status_text = ""
         with self.shared_data.lock:
             for key, value in self.shared_data.camera_params.items():
-                status_text += f"{key}: {value}\n"
+                if key in DISPLAY_PARAMS.keys():
+                    status_text += f"{DISPLAY_PARAMS[key]}: {value}\n"
+                # status_text += f"{key}: {value}\n"
         self.camera_status.config(text=status_text)
 
-    def refresh_frame_display(self):
+    def refresh_frame_display(self, *_):
         try:
             frame = self.frame_queue.get_nowait()
             self.process_frame(frame)  # Display the frame using OpenCV
@@ -553,6 +562,9 @@ class CameraGUI(tk.Tk):
                 scaled_data = np.clip((data - min_val) / (max_val - min_val) * 65535, 0, 65535).astype(np.uint16)
             elif data.dtype == np.uint8:
                 scaled_data = np.clip((data - min_val) / (max_val - min_val) * 255, 0, 255).astype(np.uint8)
+
+            # Flip left-right to match sky orientation
+            scaled_data = cv2.flip(scaled_data, 1)
 
             # Convert to BGR for consistent color display
             scaled_data_bgr = cv2.cvtColor(scaled_data, cv2.COLOR_GRAY2BGR)
@@ -588,7 +600,7 @@ class CameraGUI(tk.Tk):
         if hasattr(self, 'last_frame'):
             self.process_frame(self.last_frame)
 
-    def update_exposure_time(self, event=None):
+    def update_exposure_time(self, *_):
         try:
             exposure_time = float(self.exposure_time_entry.get()) / 1000
             if self.camera_thread.capturing:
@@ -599,7 +611,7 @@ class CameraGUI(tk.Tk):
         except ValueError:
             print("Invalid input for exposure time")
 
-    def update_batch_size(self, event=None):
+    def update_batch_size(self, *_):
         try:
             self.batch_size = int(self.cube_size_entry.get())
             print("Batch size set to ", self.batch_size, "frames per cube.")
@@ -640,6 +652,9 @@ class CameraGUI(tk.Tk):
         else:
             readout_speed_value = {"Ultra Quiet Mode": 1.0, "Standard Mode": 2.0}[selected_mode]
             self.camera_thread.set_property('READOUT_SPEED', readout_speed_value)
+            if selected_mode == "Standard Mode":
+                self.sensor_mode_var.set("Standard")
+                self.change_sensor_mode("Standard")
 
     def change_sensor_mode(self, selected_mode):
         if self.camera_thread.capturing:
@@ -651,6 +666,9 @@ class CameraGUI(tk.Tk):
         else:
             sensor_mode_value = {"Photon Number Resolving": 18.0, "Standard": 1.0}[selected_mode]
             self.camera_thread.set_property('SENSOR_MODE', sensor_mode_value)
+            if selected_mode == "Photon Number Resolving":
+                self.readout_speed_var.set("Ultra Quiet Mode")
+                self.change_readout_speed("Ultra Quiet Mode")
 
     def change_subarray_mode(self, selected_mode):
         if self.camera_thread.capturing:
@@ -673,16 +691,17 @@ class CameraGUI(tk.Tk):
                 self.subarray_vpos_entry.config(state='disabled')
                 self.subarray_vsize_entry.config(state='disabled')
 
-    def update_subarray(self, event=None):
+    def update_subarray(self, *_):
         if self.camera_thread.capturing:
             print("Cannot change subarray parameters during active capture.")
             self.status_message.config(text="Cannot change subarray parameters during active capture.")
         else:
             try:
-                hpos = float(self.subarray_hpos_entry.get())
-                hsize = float(self.subarray_hsize_entry.get())
-                vpos = float(self.subarray_vpos_entry.get())
-                vsize = float(self.subarray_vsize_entry.get())
+                # Need to round values to nearest factor of 4
+                hpos = float(round(float(self.subarray_hpos_entry.get()) / 4) * 4)
+                hsize = float(round(float(self.subarray_hsize_entry.get()) / 4) * 4)
+                vpos = float(round(float(self.subarray_vpos_entry.get()) / 4) * 4)
+                vsize = float(round(float(self.subarray_vsize_entry.get()) / 4) * 4)
 
                 self.camera_thread.set_property('SUBARRAY_HPOS', hpos)
                 self.camera_thread.set_property('SUBARRAY_HSIZE', hsize)
@@ -702,7 +721,7 @@ class CameraGUI(tk.Tk):
             framebundle_enabled = self.framebundle_var.get()
             self.camera_thread.set_property('FRAMEBUNDLE_MODE', 2.0 if framebundle_enabled else 1.0)
 
-    def update_frames_per_bundle(self, event=None):
+    def update_frames_per_bundle(self, *_):
         if self.camera_thread.capturing:
             print("Cannot change frames per bundle during active capture.")
             self.status_message.config(text="Cannot change frames per bundle during active capture.")
@@ -808,7 +827,6 @@ class CameraGUI(tk.Tk):
         # Exit the application
         if hasattr(self, 'camera_thread') and self.camera_thread.is_alive():
             self.camera_thread.join()  # Wait for the camera thread to finish
-
 
 if __name__ == "__main__":
     shared_data = SharedData()

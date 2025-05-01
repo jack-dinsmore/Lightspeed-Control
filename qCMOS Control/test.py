@@ -1,6 +1,6 @@
 import time
 from dcam import Dcamapi, Dcam, DCAMERR
-import GPS_time
+# import GPS_time
 from camera_params import CAMERA_PARAMS
 
 # Initialize the DCAM API

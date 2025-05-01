@@ -1,0 +1,13 @@
+Software installation procedures
+--------------------------------
+1. Download DCAM-API Lite for Linux
+2. Unpack tarball; navigate to DCAM-API_Lite_for_Linux/api. Run "bash install.sh usb3 fbd"
+3.
+
+Some notes
+--------------------------------
+1. At present, the camera is recognized only via USB3. Still working on connecting via CoaXpress.
+2. Since a GPS card is not installed yet on the main control PC, I commented out "import GPS_time"
+from GUI.py and test.py, as it was raising an error for not being able to find libmbgdevio.so
+
+Last updated 4/30/2025 by Chris Layden

@@ -80,4 +80,23 @@ CAMERA_PARAMS = {
     'TIME_STAMP_PRODUCER': 0x00410A10,
 }
 
-
+# Define parameters that should be displayed in the GUI,
+# and the text to be displayed for each parameter.
+DISPLAY_PARAMS = {'SENSOR MODE': 'Sensor Mode', 
+                  'READOUT SPEED': 'Readout Speed',
+                  'SENSOR TEMPERATURE': 'Sensor Temperature',
+                  'EXPOSURE TIME': 'Exposure Time',
+                  'SUBARRAY MODE': 'Subarray Mode',
+                  'SUBARRAY HPOS': 'Subarray Left Position',
+                  'SUBARRAY HSIZE': 'Subarray Width',
+                  'SUBARRAY VPOS': 'Subarray Top Position',
+                  'SUBARRAY VSIZE': 'Subarray Height',
+                  'BINNING': 'Binning',
+                  'TRIGGER SOURCE': 'Trigger Source', 
+                  'INTERNAL FRAME RATE': 'Internal Frame Rate',
+                  'IMAGE FRAMEBYTES': 'Image Frame Bytes',
+                  'IMAGE PIXEL TYPE': 'Pixel Type',
+                  'CONVERSION FACTOR COEFF': 'Conversion Gain (e-/ADU)',
+                  'CONVERSION FACTOR OFFSET': 'Bias level',
+                  # Add more parameters as needed
+}
