@@ -146,7 +146,6 @@ class CameraThread(threading.Thread):
             set_success = self.dcam.prop_setvalue(CAMERA_PARAMS[prop_name], value)
             if set_success is False:
                 raise Exception(f"Failed to set property {prop_name}: {self.dcam.lasterr()}")
-            print(value, set_success, self.dcam.prop_getvalue(CAMERA_PARAMS[prop_name]))
             self.update_camera_params()
             # Track the modified parameter in the dictionary
             self.modified_params[prop_name] = value
@@ -264,7 +263,6 @@ class SaveThread(threading.Thread):
         current_time = time.localtime()
         start_time_filename_str = time.strftime('%Y%m%d_%H%M%S', current_time)
 
-        # Create captures directory if it doesn't exist
         os.makedirs("captures", exist_ok=True)
 
         # Start processing frames
@@ -402,7 +400,8 @@ class CameraGUI(tk.Tk):
 
         Label(camera_controls_frame, text="Frames per Datacube").grid(row=5, column=0)
         self.cube_size_var = tk.IntVar()
-        self.cube_size_var.set(100)
+        self.batch_size = 100
+        self.cube_size_var.set(self.batch_size)
         self.cube_size_var.trace_add("write", self.update_batch_size)
         self.cube_size_entry = Entry(camera_controls_frame, textvariable=self.cube_size_var)
         self.cube_size_entry.grid(row=5, column=1)
@@ -479,7 +478,7 @@ class CameraGUI(tk.Tk):
         self.subarray_vsize_entry.config(state='disabled')  # Disable after inserting value
 
         # Add text noting that values will be rounded to nearest factor of 4
-        subarray_note = "Note: Values will be rounded to nearest factor of 4"
+        subarray_note = "Note: Values will be rounded to nearest factor of 4."
         Label(subarray_controls_frame, text=subarray_note).grid(row=5, column=0, columnspan=2)
 
         # Advanced Controls
@@ -496,6 +495,9 @@ class CameraGUI(tk.Tk):
         self.frames_per_bundle_var.trace_add("write", self.update_frames_per_bundle)
         self.frames_per_bundle_entry = Entry(advanced_controls_frame, textvariable=self.frames_per_bundle_var)
         self.frames_per_bundle_entry.grid(row=1, column=1)
+        # Add text noting what frame bundling means
+        subarray_note = "When enabled, this many frames will \nbe concatenated into one image."
+        Label(advanced_controls_frame, text=subarray_note).grid(row=2, column=0, columnspan=2)
 
         # Display Controls with side-by-side layout for Min and Max Percentile
         display_controls_frame = LabelFrame(self.main_frame, text="Display Controls", padx=5, pady=5)
