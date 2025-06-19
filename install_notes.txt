@@ -1,4 +1,4 @@
-Software installation procedures
+Software installation procedures: things I did to get code working
 
 For qCMOS connection
 --------------------------------
@@ -16,9 +16,12 @@ For ZWO filter wheel connection
 6. Deleted original (Windows SDK file)
 7. Copied .so.1.7 file to examples
 8. Commented out "self.SetPosition(ID, 0)" in pyzwoefw.py (not sure why this worked, but it fixed an error)
-9. Added "ctypes.CDLL("libudev.so.1", mode=ctypes.RTLD_GLOBAL)" to header of control file
-10. Ran "sudo install efw.rules /lib/udev/rules.d" to be able to connect to filter wheel without needing root privileges
-11. Restarted computer
+9. In pyzwoefw.py, added line
+efwlib = c.cdll.LoadLibrary('/home/lightspeed/Documents/Lightspeed-Control/PyZWOEFW-main/examples/libEFWFilter.so.1.7')
+after importing os and defining file directory.
+10. Added "ctypes.CDLL("libudev.so.1", mode=ctypes.RTLD_GLOBAL)" to header of control file
+11. Ran "sudo install efw.rules /lib/udev/rules.d" to be able to connect to filter wheel without needing root privileges
+12. Restarted computer
 
 Some notes
 --------------------------------
@@ -26,4 +29,4 @@ Some notes
 2. Since a GPS card is not installed yet on the main control PC, I commented out "import GPS_time"
 from GUI.py and test.py, as it was raising an error for not being able to find libmbgdevio.so
 
-Last updated 05/12/2025 by Chris Layden
+Last updated 06/18/2025 by Chris Layden

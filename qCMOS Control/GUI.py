@@ -13,6 +13,9 @@ from datetime import datetime
 from astropy.time import Time
 import os
 import warnings
+from PyZWOEFW import EFW
+import ctypes
+ctypes.CDLL("libudev.so.1", mode=ctypes.RTLD_GLOBAL)
 
 
 class SharedData:
@@ -334,12 +337,36 @@ class SaveThread(threading.Thread):
         self.running = False
         # Do not call self.join() here; let the calling code handle it
 
+class PeripheralsThread(threading.Thread):
+    def __init__(self, shared_data, frame_queue, timestamp_queue, gui_ref):
+        super().__init__()
+        self.shared_data = shared_data
+        self.frame_queue = frame_queue
+        self.timestamp_queue = timestamp_queue
+        self.gui_ref = gui_ref  # Reference to the GUI
+        self.efw = None # ZWO 7-position filter wheel
+
+    def run(self):
+        # Run the connection process in a separate thread to avoid blocking the GUI
+        threading.Thread(target=self.connect_peripherals, daemon=True).start()
+
+    def connect_peripherals(self):
+        print("Connecting to ZWO filter wheel...")
+        try:
+            self.efw = EFW()
+            # Need to read the position before setting position will work
+            self.efw.GetPosition(0)
+        except:
+            print("Failed to connect to ZWO filter wheel.")
+            return
 
 class CameraGUI(tk.Tk):
-    def __init__(self, shared_data, camera_thread, frame_queue, timestamp_queue):
+    def __init__(self, shared_data, camera_thread, peripherals_thread,
+                 frame_queue, timestamp_queue):
         super().__init__()
         self.shared_data = shared_data
         self.camera_thread = camera_thread
+        self.peripherals_thread = peripherals_thread
         self.frame_queue = frame_queue
         self.timestamp_queue = timestamp_queue
         self.updating_camera_status = True  # Flag for camera status update
@@ -415,6 +442,16 @@ class CameraGUI(tk.Tk):
                                                    *self.output_trigger_kind_options.keys(),
                                                    command=self.update_output_trigger)
         self.output_trigger_kind_menu.grid(row=6, column=1)
+
+        # Make menu to select filter position
+        Label(camera_controls_frame, text="Filter Position:").grid(row=7, column=0)
+        self.filter_position_var = tk.StringVar()
+        # self.filter_position_var.set('0')
+        self.filter_position_options = {i for i in range(7)}  # Assuming 7 positions
+        self.filter_position_menu = OptionMenu(camera_controls_frame, self.filter_position_var,
+                                               *self.filter_position_options,
+                                               command=self.update_filter_position)
+        self.filter_position_menu.grid(row=7, column=1)
 
         # Camera Settings
         camera_settings_frame = LabelFrame(self.main_frame, text="Camera Settings", padx=5, pady=5)
@@ -639,6 +676,16 @@ class CameraGUI(tk.Tk):
             trigger_kind = self.output_trigger_kind_options[self.output_trigger_kind_var.get()]
             self.camera_thread.set_property('OUTPUT_TRIG_KIND_0', trigger_kind)
 
+    def update_filter_position(self, *_):
+        if self.peripherals_thread.efw is None:
+            self.filter_position_menu.config(state='disabled')
+            self.status_message.config(text="Filter wheel not connected.", fg="red")
+        else:
+            position = int(self.filter_position_var.get())
+            self.peripherals_thread.efw.SetPosition(0, position)
+            print(f"Filter position set to {position}.")
+        return
+
     def change_binning(self, selected_binning):
         if self.camera_thread.capturing:
             print("Cannot change binning during active capture.")
@@ -853,13 +900,18 @@ if __name__ == "__main__":
     timestamp_queue = queue.Queue()
 
     # Create the root window first
-    app = CameraGUI(shared_data, None, frame_queue, timestamp_queue)
+    app = CameraGUI(shared_data, None, None, frame_queue, timestamp_queue)
 
     # Initialize the camera thread with a reference to the GUI
     camera_thread = CameraThread(shared_data, frame_queue, timestamp_queue, app)
     camera_thread.start()
 
+    # Initialize peripheral devices
+    peripherals_thread = PeripheralsThread(shared_data, frame_queue, timestamp_queue, app)
+    peripherals_thread.start()
+
     app.camera_thread = camera_thread
+    app.peripherals_thread = peripherals_thread
 
     app.protocol("WM_DELETE_WINDOW", app.on_close)
     app.mainloop()

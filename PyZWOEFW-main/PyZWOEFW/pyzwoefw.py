@@ -1,5 +1,6 @@
 import ctypes as c
 import sys
+import os
 from ctypes.util import find_library
 from time import sleep
 # Returned error code
@@ -62,15 +63,9 @@ class _EFW_INFO(c.Structure):
             r[k] = v
         return r
 
-def init(library_file): 
-
-    if not library_file:
-        library_file = find_library('EFW_filter')
-        if not library_file:
-            raise EFW_Error('EFW SDK library not found')
-
-    efwlib = c.cdll.LoadLibrary(library_file)
-    # efwlib = c.cdll.LoadLibrary('../examples/libEFWFilter.so.1.7')
+def init(library_file):
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    efwlib = c.cdll.LoadLibrary(current_dir + '/../examples/libEFWFilter.so.1.7')
 
     efwlib.EFWGetNum.argtypes = []
     efwlib.EFWGetNum.restype = c.c_int
