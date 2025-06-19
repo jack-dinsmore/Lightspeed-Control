@@ -1,0 +1,29 @@
+Software installation procedures
+
+For qCMOS connection
+--------------------------------
+1. Download DCAM-API Lite for Linux
+2. Unpack tarball; navigate to DCAM-API_Lite_for_Linux/api. Run "bash install.sh usb3 fbd"
+3.
+
+For ZWO filter wheel connection
+--------------------------------
+1. Downloaded PyZWOEFW GitHub repo by Andre Ebel: https://github.com/AndreEbel/PyZWOEFW/tree/main
+2. Moved folder to LIGHTSPEED-CONTROL repo
+3. Navigated to LIGHTSPEED-CONTROL folder. Ran "pip install -e PyZWOEFW-main"
+4. Ran "pip install PyQt5"
+5. Downloaded ZWO EFW SDK from https://www.zwoastro.com/software/. Located and unpacked tarball EFW_Linux_macOS_SDK_V1.7.tar.bz2
+6. Deleted original (Windows SDK file)
+7. Copied .so.1.7 file to examples
+8. Commented out "self.SetPosition(ID, 0)" in pyzwoefw.py (not sure why this worked, but it fixed an error)
+9. Added "ctypes.CDLL("libudev.so.1", mode=ctypes.RTLD_GLOBAL)" to header of control file
+10. Ran "sudo install efw.rules /lib/udev/rules.d" to be able to connect to filter wheel without needing root privileges
+11. Restarted computer
+
+Some notes
+--------------------------------
+1. At present, the camera is recognized only via USB3. Still working on connecting via CoaXpress.
+2. Since a GPS card is not installed yet on the main control PC, I commented out "import GPS_time"
+from GUI.py and test.py, as it was raising an error for not being able to find libmbgdevio.so
+
+Last updated 05/12/2025 by Chris Layden

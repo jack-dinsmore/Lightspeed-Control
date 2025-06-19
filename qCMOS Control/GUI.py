@@ -106,9 +106,9 @@ class CameraThread(threading.Thread):
         self.set_property('EXPOSURE_TIME', 0.1)
         self.set_property('TRIGGER_SOURCE', 1.0)  # 1.0 corresponds to INTERNAL
         self.set_property('TRIGGER_MODE', 6.0)  # 6.0 corresponds to START
-        self.set_property('OUTPUT_TRIG_KIND_0', 2.0)
+        self.set_property('OUTPUT_TRIG_KIND_0', 1.0) # 1.0 corresonds to LOW
         self.set_property('OUTPUT_TRIG_ACTIVE_0', 1.0)
-        self.set_property('OUTPUT_TRIG_POLARITY_0', 1.0)
+        self.set_property('OUTPUT_TRIG_POLARITY_0', 2.0)
         self.set_property('OUTPUT_TRIG_PERIOD_0', 1.0)
         self.set_property('SENSOR_MODE', 18.0)
         self.set_property('IMAGE_PIXEL_TYPE', 1.0)
@@ -406,6 +406,16 @@ class CameraGUI(tk.Tk):
         self.cube_size_entry = Entry(camera_controls_frame, textvariable=self.cube_size_var)
         self.cube_size_entry.grid(row=5, column=1)
 
+        # Make menu to select output trigger kind
+        Label(camera_controls_frame, text="Output Trigger Kind:").grid(row=6, column=0)
+        self.output_trigger_kind_var = tk.StringVar()
+        self.output_trigger_kind_var.set('LOW')
+        self.output_trigger_kind_options = {'LOW': 1, 'GLOBALEXPOSURE': 2, 'HIGH': 5}
+        self.output_trigger_kind_menu = OptionMenu(camera_controls_frame, self.output_trigger_kind_var,
+                                                   *self.output_trigger_kind_options.keys(),
+                                                   command=self.update_output_trigger)
+        self.output_trigger_kind_menu.grid(row=6, column=1)
+
         # Camera Settings
         camera_settings_frame = LabelFrame(self.main_frame, text="Camera Settings", padx=5, pady=5)
         camera_settings_frame.grid(row=1, column=1, sticky='n')
@@ -621,6 +631,13 @@ class CameraGUI(tk.Tk):
             print("Invalid number of frames per cube. Setting to 100.")
             self.batch_size = 100
 
+    def update_output_trigger(self, *_):
+        if self.camera_thread.capturing:
+            print("Cannot change output trigger during active capture.")
+            self.status_message.config(text="Cannot change output trigger during active capture.")
+        else:
+            trigger_kind = self.output_trigger_kind_options[self.output_trigger_kind_var.get()]
+            self.camera_thread.set_property('OUTPUT_TRIG_KIND_0', trigger_kind)
 
     def change_binning(self, selected_binning):
         if self.camera_thread.capturing:
