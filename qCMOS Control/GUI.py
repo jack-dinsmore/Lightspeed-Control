@@ -13,7 +13,7 @@ from datetime import datetime
 from astropy.time import Time
 import os
 import warnings
-from PyZWOEFW import EFW
+# from PyZWOEFW import EFW
 import ctypes
 ctypes.CDLL("libudev.so.1", mode=ctypes.RTLD_GLOBAL)
 
@@ -371,6 +371,7 @@ class CameraGUI(tk.Tk):
         self.timestamp_queue = timestamp_queue
         self.updating_camera_status = True  # Flag for camera status update
         self.updating_frame_display = True  # Flag for frame display update
+        self.updating_peripherals_status = True # Flag for peripherals update
 
         # Initialize percentile variables within the Tkinter root window context
         self.min_val = tk.StringVar(value="0")  # Initial min percentile set to 0%
@@ -446,10 +447,10 @@ class CameraGUI(tk.Tk):
         # Make menu to select filter position
         Label(camera_controls_frame, text="Filter Position:").grid(row=7, column=0)
         self.filter_position_var = tk.StringVar()
-        # self.filter_position_var.set('0')
-        self.filter_position_options = {i for i in range(7)}  # Assuming 7 positions
+        self.filter_position_options = {'Open': 0, 'u\'': 1, 'g\'': 2, 'r\'': 3,
+                                        'i\'': 4, 'z\'': 5}
         self.filter_position_menu = OptionMenu(camera_controls_frame, self.filter_position_var,
-                                               *self.filter_position_options,
+                                               *self.filter_position_options.keys(),
                                                command=self.update_filter_position)
         self.filter_position_menu.grid(row=7, column=1)
 
@@ -566,6 +567,7 @@ class CameraGUI(tk.Tk):
         # Start the update loops
         self.update_camera_status()
         self.update_frame_display()
+        self.update_peripherals_status()
 
     def update_camera_status(self):
         if self.updating_camera_status:
@@ -576,6 +578,11 @@ class CameraGUI(tk.Tk):
         if self.updating_frame_display:
             self.refresh_frame_display()
         self.after(17, self.update_frame_display)  # Update frame display every ~17 ms (about 60 FPS)
+
+    def update_peripherals_status(self):
+        if self.updating_peripherals_status and self.peripherals_thread is not None:
+            self.refresh_peripherals_status()
+        self.after(1000, self.update_peripherals_status)  # Update peripherals status every second
 
     def refresh_camera_status(self):
         status_text = ""
@@ -592,6 +599,9 @@ class CameraGUI(tk.Tk):
             self.process_frame(frame)  # Display the frame using OpenCV
         except queue.Empty:
             cv2.waitKey(1)  # Keep the window interactive when no frames are available
+
+    def refresh_peripherals_status(self):
+        self.update_filter_position()
 
     def process_frame(self, data):
         # Handle both 8-bit and 16-bit data
@@ -681,7 +691,7 @@ class CameraGUI(tk.Tk):
             self.filter_position_menu.config(state='disabled')
             self.status_message.config(text="Filter wheel not connected.", fg="red")
         else:
-            position = int(self.filter_position_var.get())
+            position = self.filter_position_options[self.filter_position_var.get()]
             self.peripherals_thread.efw.SetPosition(0, position)
             print(f"Filter position set to {position}.")
         return
@@ -717,10 +727,10 @@ class CameraGUI(tk.Tk):
             self.readout_speed_var.set(current_readout_speed)
         else:
             readout_speed_value = {"Ultra Quiet Mode": 1.0, "Standard Mode": 2.0}[selected_mode]
-            self.camera_thread.set_property('READOUT_SPEED', readout_speed_value)
             if selected_mode == "Standard Mode":
                 self.sensor_mode_var.set("Standard")
                 self.change_sensor_mode("Standard")
+            self.camera_thread.set_property('READOUT_SPEED', readout_speed_value)
 
     def change_sensor_mode(self, selected_mode):
         if self.camera_thread.capturing:
