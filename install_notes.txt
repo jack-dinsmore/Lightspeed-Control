@@ -38,13 +38,17 @@ All of the following in Windows VM:
 Also used PLAY to set to Dark Mode, which turns off LEDs on the SESTO SENSO 2 focusers (have to click arrow in bottom right corner to get to this option).
 8. Made python script with ASCOM. A commented out section of this script opened the ASCOM Chooser. Through this Chooser, I selected PLL ASCOM Rotator,
 selected properties, and made sure this device connects to COM3. I then selected PLL ASCOM Rotator 2, selected properties, and linked this to COM4.
-9. Made python script that is now in Rotator Control file. This script can be run in the Windows VM (under Documents) to change the absolute positions 
-of the rotators. To start virtual machine, open a command prompt. Type "virt-manager". Select the win10 machine, hit Open, and press the play button.
+9. Made ascom_rotators.py script in Documents of Windows VM that can be run to change the absolute positions of the rotators.
+To start virtual machine, open a command prompt. Type "virt-manager". Select the win10 machine, hit Open, and press the play button.
+
+For CyberPower PDU41003 Control
+--------------------------------
+1. Downloaded Jack Haviland's PDU control code (GUI doesn't work, but rest does).
+2. Navigated to python-cyberpower-pdu. Ran "pip install -e ."
 
 Some notes
 --------------------------------
-1. At present, the camera is recognized only via USB3. Still working on connecting via CoaXpress.
-2. Since a GPS card is not installed yet on the main control PC, I commented out "import GPS_time"
+1. Since a GPS card is not installed yet on the main control PC, I commented out "import GPS_time"
 from GUI.py and test.py, as it was raising an error for not being able to find libmbgdevio.so
 
 Last updated 06/18/2025 by Chris Layden
