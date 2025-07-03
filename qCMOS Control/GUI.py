@@ -14,6 +14,8 @@ from astropy.time import Time
 import os
 import warnings
 # from PyZWOEFW import EFW
+import asyncio
+from cyberpower_pdu import CyberPowerPDU, OutletCommand
 import ctypes
 ctypes.CDLL("libudev.so.1", mode=ctypes.RTLD_GLOBAL)
 
@@ -338,19 +340,24 @@ class SaveThread(threading.Thread):
         # Do not call self.join() here; let the calling code handle it
 
 class PeripheralsThread(threading.Thread):
-    def __init__(self, shared_data, frame_queue, timestamp_queue, gui_ref):
+    def __init__(self, shared_data, frame_queue, timestamp_queue, pdu_ip, gui_ref):
         super().__init__()
         self.shared_data = shared_data
         self.frame_queue = frame_queue
         self.timestamp_queue = timestamp_queue
         self.gui_ref = gui_ref  # Reference to the GUI
         self.efw = None # ZWO 7-position filter wheel
+        self.pdu_ip = pdu_ip  # IP address for the CyberPower PDU
+        self.pdu = None
 
     def run(self):
         # Run the connection process in a separate thread to avoid blocking the GUI
-        threading.Thread(target=self.connect_peripherals, daemon=True).start()
+        threading.Thread(target=self.thread_target, daemon=True).start()
 
-    def connect_peripherals(self):
+    def thread_target(self):
+        asyncio.run(self.connect_peripherals())
+
+    async def connect_peripherals(self):
         print("Connecting to ZWO filter wheel...")
         try:
             self.efw = EFW()
@@ -358,7 +365,22 @@ class PeripheralsThread(threading.Thread):
             self.efw.GetPosition(0)
         except:
             print("Failed to connect to ZWO filter wheel.")
-            return
+        print("Connecting to CyberPower PDU...")
+        try:
+            self.pdu = CyberPowerPDU(ip_address=self.pdu_ip, simulate=False)
+            await self.pdu.initialize()
+        except:
+            print("Failed to connect to CyberPower PDU.")
+
+    def command_outlet(self, outlet, command):
+        if self.pdu is not None:
+            try:
+                asyncio.run(self.pdu.send_outlet_command(outlet, command))
+                print(f"Sent command {command} to outlet {outlet}.")
+            except Exception as e:
+                print(f"Failed to send command to outlet {outlet}: {e}")
+        else:
+            print("PDU is not connected.")
 
 class CameraGUI(tk.Tk):
     def __init__(self, shared_data, camera_thread, peripherals_thread,
@@ -403,7 +425,7 @@ class CameraGUI(tk.Tk):
 
         Label(camera_controls_frame, text="Exposure Time (ms):").grid(row=0, column=0)
         self.exposure_time_var = tk.DoubleVar()
-        self.exposure_time_var.set(200)
+        self.exposure_time_var.set(100)
         self.exposure_time_var.trace_add("write", self.update_exposure_time)
         self.exposure_time_entry = Entry(camera_controls_frame, textvariable=self.exposure_time_var)
         self.exposure_time_entry.grid(row=0, column=1)
@@ -435,10 +457,10 @@ class CameraGUI(tk.Tk):
         self.cube_size_entry.grid(row=5, column=1)
 
         # Make menu to select output trigger kind
-        Label(camera_controls_frame, text="Output Trigger Kind:").grid(row=6, column=0)
+        Label(camera_controls_frame, text="Shutter:").grid(row=6, column=0)
         self.output_trigger_kind_var = tk.StringVar()
-        self.output_trigger_kind_var.set('LOW')
-        self.output_trigger_kind_options = {'LOW': 1, 'GLOBALEXPOSURE': 2, 'HIGH': 5}
+        self.output_trigger_kind_var.set('Open')
+        self.output_trigger_kind_options = {'Open': 1, 'Closed': 5}
         self.output_trigger_kind_menu = OptionMenu(camera_controls_frame, self.output_trigger_kind_var,
                                                    *self.output_trigger_kind_options.keys(),
                                                    command=self.update_output_trigger)
@@ -453,6 +475,11 @@ class CameraGUI(tk.Tk):
                                                *self.filter_position_options.keys(),
                                                command=self.update_filter_position)
         self.filter_position_menu.grid(row=7, column=1)
+
+        # Make button to power cycle camera by turning off and on PDU outlet 1
+        self.power_cycle_button = Button(camera_controls_frame, text="Power Cycle Camera",
+                                         command=self.power_cycle_camera)
+        self.power_cycle_button.grid(row=8, column=0, columnspan=2)
 
         # Camera Settings
         camera_settings_frame = LabelFrame(self.main_frame, text="Camera Settings", padx=5, pady=5)
@@ -695,6 +722,15 @@ class CameraGUI(tk.Tk):
             self.peripherals_thread.efw.SetPosition(0, position)
             print(f"Filter position set to {position}.")
         return
+    
+    def power_cycle_camera(self):
+        # Power cycle the camera by turning off and on the PDU outlet    
+        self.peripherals_thread.command_outlet(1, OutletCommand.IMMEDIATE_OFF)
+        time.sleep(1)  # Wait for 1 second before turning it back on
+        self.peripherals_thread.command_outlet(1, OutletCommand.IMMEDIATE_ON)
+        print("Camera power cycled. Will try to reconnect in 60 seconds.")
+        time.sleep(60)
+        self.reset_camera()
 
     def change_binning(self, selected_binning):
         if self.camera_thread.capturing:
@@ -905,6 +941,7 @@ class CameraGUI(tk.Tk):
             self.camera_thread.join()  # Wait for the camera thread to finish
 
 if __name__ == "__main__":
+
     shared_data = SharedData()
     frame_queue = queue.Queue(maxsize=3)  # Limit the size of the frame queue
     timestamp_queue = queue.Queue()
@@ -917,7 +954,7 @@ if __name__ == "__main__":
     camera_thread.start()
 
     # Initialize peripheral devices
-    peripherals_thread = PeripheralsThread(shared_data, frame_queue, timestamp_queue, app)
+    peripherals_thread = PeripheralsThread(shared_data, frame_queue, timestamp_queue, "18.25.72.251", app)
     peripherals_thread.start()
 
     app.camera_thread = camera_thread
