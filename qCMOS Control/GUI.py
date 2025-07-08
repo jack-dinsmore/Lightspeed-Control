@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import StringVar, OptionMenu, Checkbutton, Label, Entry, Button, Scale, Frame, LabelFrame
 from dcam import Dcamapi, Dcam, DCAMERR
 from camera_params import CAMERA_PARAMS, DISPLAY_PARAMS
-# import GPS_time  # Importing the GPS_time module
+import GPS_time  # Importing the GPS_time module
 import threading
 import time
 import numpy as np
@@ -13,7 +13,7 @@ from datetime import datetime
 from astropy.time import Time
 import os
 import warnings
-# from PyZWOEFW import EFW
+from PyZWOEFW import EFW
 import asyncio
 from cyberpower_pdu import CyberPowerPDU, OutletCommand
 import ctypes
@@ -50,35 +50,78 @@ class CameraThread(threading.Thread):
         threading.Thread(target=self.connect_camera, daemon=True).start()
 
     def connect_camera(self):
-        print("Initializing DCAM API...")
-        if Dcamapi.init() is not False:
+        # Retry loop until camera connects
+        while self.running:
+            print("Attempting to initialize DCAM API...")
+            # Initialize the API
+            init_success = True
+            try:
+                ret = Dcamapi.init()
+                if ret is False:
+                    err = Dcamapi.lasterr()
+                    print(f"DCAM API init error: {err}")
+                    init_success = False
+            except Exception as e:
+                print(f"Exception during Dcamapi.init(): {e}")
+                init_success = False
+
+            if not init_success:
+                # Ensure uninitialized state
+                try:
+                    Dcamapi.uninit()
+                except Exception as e:
+                    pass
+                print("Initialization failed, retrying in 5 seconds...")
+                if self.gui_ref is not None:
+                    self.gui_ref.status_message.config(text="Camera not connected.", fg="red")
+                time.sleep(5)
+                continue
+
+            # Attempt to open the camera device
             try:
                 print("Opening camera device...")
-                self.dcam = Dcam(0)  # Assuming first device (index 0)
-                if self.dcam.dev_open() is not False:
-                    print("Camera device opened successfully.")
-
-                    # On the first run, set defaults; otherwise, restore modified parameters
-                    if self.first_run:
-                        self.set_defaults()
-                        self.first_run = False  # Set flag to False after the first run
-                    else:
-                        self.restore_modified_params()
-
-                    self.update_camera_params()
-                    print("Entering main camera loop.")
-                    while self.running:
-                        self.paused.wait()  # Wait if the thread is paused
-                        if self.capturing:
-                            self.capture_frame()
-                        else:
-                            time.sleep(0.1)  # Sleep only when not capturing
-                else:
-                    print(f"Error opening device: {self.dcam.lasterr()}")
+                cam = Dcam(0)
+                if cam.dev_open() is False:
+                    err = cam.lasterr()
+                    print(f"Error opening device: {err}")
+                    cam = None
+                    raise RuntimeError(f"Device open failed: {err}")
+                print("Camera device opened successfully.")
+                self.dcam = cam
             except Exception as e:
-                print(f"Exception in connect_camera: {e}")
+                print(f"Exception opening camera: {e}")
+                if self.gui_ref is not None:
+                    self.gui_ref.status_message.config(text="Camera not connected.", fg="red")
+                # Clean up DCAM API before retrying
+                try:
+                    Dcamapi.uninit()
+                except Exception:
+                    pass
+                print("Camera not connected. Retrying in 5 seconds...")
+                time.sleep(5)
+                continue
+
+            # At this point, camera connected
+            break
+
+        if not self.running or self.dcam is None:
+            return
+
+        # Configure camera
+        if self.first_run:
+            self.set_defaults()
+            self.first_run = False
         else:
-            print(f"Error initializing DCAM API: {Dcamapi.lasterr()}")
+            self.restore_modified_params()
+
+        self.update_camera_params()
+        print("Camera connected. Entering main loop.")
+        while self.running:
+            self.paused.wait()
+            if self.capturing:
+                self.capture_frame()
+            else:
+                time.sleep(0.1)
 
     def disconnect_camera(self):
         print("Disconnecting camera...")
@@ -165,7 +208,7 @@ class CameraThread(threading.Thread):
     def start_capture(self):
         print("Starting capture...")
         # Clear the GPS timestamp buffer before starting a new capture
-        # GPS_time.clear_buffer()
+        GPS_time.clear_buffer()
 
         # Ensure the camera is not capturing before starting a new capture session
         if self.capturing:
@@ -221,7 +264,7 @@ class CameraThread(threading.Thread):
 
                     # Fetch the GPS timestamp only once at the start of the capture sequence
                     if self.first_frame:
-                        # self.start_time = GPS_time.get_first_timestamp()
+                        self.start_time = GPS_time.get_first_timestamp()
                         self.first_frame = False  # Prevent further updates
 
                     # Increment the frame index
@@ -358,19 +401,44 @@ class PeripheralsThread(threading.Thread):
         asyncio.run(self.connect_peripherals())
 
     async def connect_peripherals(self):
-        print("Connecting to ZWO filter wheel...")
-        try:
-            self.efw = EFW()
-            # Need to read the position before setting position will work
-            self.efw.GetPosition(0)
-        except:
-            print("Failed to connect to ZWO filter wheel.")
+        self.connect_efw()
         print("Connecting to CyberPower PDU...")
         try:
             self.pdu = CyberPowerPDU(ip_address=self.pdu_ip, simulate=False)
             await self.pdu.initialize()
         except:
             print("Failed to connect to CyberPower PDU.")
+
+    def connect_efw(self):
+        print("Connecting to ZWO filter wheel...")
+        try:
+            self.efw = EFW()
+            # Need to read the position before setting position will work
+            self.efw.GetPosition(0)
+            print("ZWO filter wheel connected successfully.")
+        except Exception as e:
+            print(f"Failed to connect to ZWO filter wheel: {e}")
+            self.efw = None
+
+    def disconnect_peripherals(self):
+        print("Disconnecting peripherals...")
+        if self.efw is not None:
+            try:
+                self.efw.Close(0)
+                print("ZWO filter wheel disconnected successfully.")
+            except Exception as e:
+                print(f"Failed to disconnect ZWO filter wheel: {e}")
+        else:
+            print("ZWO filter wheel was not connected.")
+
+        if self.pdu is not None:
+            try:
+                asyncio.run(self.pdu.close())
+                print("CyberPower PDU disconnected successfully.")
+            except Exception as e:
+                print(f"Failed to disconnect CyberPower PDU: {e}")
+        else:
+            print("CyberPower PDU was not connected.")
 
     def command_outlet(self, outlet, command):
         if self.pdu is not None:
@@ -381,6 +449,18 @@ class PeripheralsThread(threading.Thread):
                 print(f"Failed to send command to outlet {outlet}: {e}")
         else:
             print("PDU is not connected.")
+
+    async def get_all_outlet_states(self):
+        if self.pdu is not None:
+            try:
+                states = await self.pdu.get_all_outlet_states()
+                return states
+            except Exception as e:
+                print(f"Failed to get outlet states: {e}")
+                return {}
+        else:
+            print("PDU is not connected.")
+            return {}
 
 class CameraGUI(tk.Tk):
     def __init__(self, shared_data, camera_thread, peripherals_thread,
@@ -415,7 +495,7 @@ class CameraGUI(tk.Tk):
         self.camera_status = tk.Label(camera_params_frame, text="", justify=tk.LEFT, anchor="w", width=60, height=80, wraplength=400)
         self.camera_status.pack(fill='both', expand=True)
 
-        # Label for status messages - move it to the top so it's defined early
+        # Label for status messages
         self.status_message = tk.Label(self.main_frame, text="", justify=tk.LEFT, anchor="w", width=40, wraplength=400, fg="blue")
         self.status_message.grid(row=5, column=0, columnspan=2, sticky='nsew')
 
@@ -466,20 +546,10 @@ class CameraGUI(tk.Tk):
                                                    command=self.update_output_trigger)
         self.output_trigger_kind_menu.grid(row=6, column=1)
 
-        # Make menu to select filter position
-        Label(camera_controls_frame, text="Filter Position:").grid(row=7, column=0)
-        self.filter_position_var = tk.StringVar()
-        self.filter_position_options = {'Open': 0, 'u\'': 1, 'g\'': 2, 'r\'': 3,
-                                        'i\'': 4, 'z\'': 5}
-        self.filter_position_menu = OptionMenu(camera_controls_frame, self.filter_position_var,
-                                               *self.filter_position_options.keys(),
-                                               command=self.update_filter_position)
-        self.filter_position_menu.grid(row=7, column=1)
-
         # Make button to power cycle camera by turning off and on PDU outlet 1
         self.power_cycle_button = Button(camera_controls_frame, text="Power Cycle Camera",
                                          command=self.power_cycle_camera)
-        self.power_cycle_button.grid(row=8, column=0, columnspan=2)
+        self.power_cycle_button.grid(row=7, column=0, columnspan=2)
 
         # Camera Settings
         camera_settings_frame = LabelFrame(self.main_frame, text="Camera Settings", padx=5, pady=5)
@@ -591,6 +661,49 @@ class CameraGUI(tk.Tk):
         # self.max_slider = Scale(display_controls_frame, from_=0, to=200, orient='horizontal', variable=self.max_val)
         # self.max_slider.grid(row=0, column=3)
 
+        # Peripherals Controls
+        self.peripherals_controls_frame = LabelFrame(self.main_frame, text="Peripherals Controls", padx=5, pady=5)
+        self.peripherals_controls_frame.grid(row=5, column=1, sticky='n')
+
+        # Make menu to select filter position
+        Label(self.peripherals_controls_frame, text="Filter Position:").grid(row=0, column=1)
+        self.filter_position_var = tk.StringVar()
+        self.filter_options = {'0 (Open)': 0, '1 (u\')': 1, '2 (g\')': 2, '3 (r\')': 3,
+                                        '4 (i\')': 4, '5 (z\')': 5}
+        self.filter_position_menu = OptionMenu(self.peripherals_controls_frame, self.filter_position_var,
+                                               *self.filter_options.keys(),
+                                               command=self.update_filter_position)
+        self.filter_position_menu.grid(row=0, column=2)
+
+        Label(self.peripherals_controls_frame, text="PDU Outlet States").grid(row=1, column=0, columnspan=4)
+        # Make set of 16 switches to control the CyberPower PDU outlets
+        self.pdu_outlet_dict = {1: 'Empty', 2: 'qCMOS', 3: 'Empty', 4: 'Empty',
+                                5: 'Empty', 6: 'Empty', 7: 'Empty', 8: 'Empty',
+                                9: 'Empty', 10: 'Empty', 11: 'Empty', 12: 'Empty',
+                                13: 'Empty', 14: 'Empty', 15: 'Empty', 16: 'Shutter'}
+        self.pdu_outlet_vars = {}
+        self.pdu_outlet_buttons = {}
+        # Make a button for each outlet. Should be green and depressed with 'ON' text when outlet is on, red and raised with 'OFF' text when outlet is off.
+        # Text next to each should be on left and come from self.pdu_outlet_dict. Adjust spacing so all text is aligned.
+        # Make a button for each outlet. Should be green/'ON' when on, red/'OFF' when off.
+        for idx, name in self.pdu_outlet_dict.items():
+            # eight outlets per column, two columns
+            row = (idx - 1) % 8 + 2
+            col = (idx - 1) // 8 * 2
+            name = str(idx) + ': ' + name  # Add outlet number to the name
+            # label on left
+            tk.Label(self.peripherals_controls_frame, text=name, width=12, anchor='w')\
+              .grid(row=row, column=col, padx=2, pady=2)
+            # on/off variable & button
+            var = tk.BooleanVar(value=True)
+            self.pdu_outlet_vars[idx] = var
+            btn = tk.Checkbutton(self.peripherals_controls_frame, text='ON', relief='sunken',
+                                 fg='green', variable=var, indicatoron=False, width=3,
+                                 command=lambda i=idx: self.toggle_outlet(i))
+            btn.grid(row=row, column=col + 1, padx=2, pady=2)
+            self.pdu_outlet_buttons[idx] = btn
+
+
         # Start the update loops
         self.update_camera_status()
         self.update_frame_display()
@@ -609,7 +722,7 @@ class CameraGUI(tk.Tk):
     def update_peripherals_status(self):
         if self.updating_peripherals_status and self.peripherals_thread is not None:
             self.refresh_peripherals_status()
-        self.after(1000, self.update_peripherals_status)  # Update peripherals status every second
+        self.after(3000, self.update_peripherals_status)  # Update peripherals status every 3 seconds
 
     def refresh_camera_status(self):
         status_text = ""
@@ -629,6 +742,7 @@ class CameraGUI(tk.Tk):
 
     def refresh_peripherals_status(self):
         self.update_filter_position()
+        self.update_outlet_states()
 
     def process_frame(self, data):
         # Handle both 8-bit and 16-bit data
@@ -714,23 +828,72 @@ class CameraGUI(tk.Tk):
             self.camera_thread.set_property('OUTPUT_TRIG_KIND_0', trigger_kind)
 
     def update_filter_position(self, *_):
-        if self.peripherals_thread.efw is None:
-            self.filter_position_menu.config(state='disabled')
-            self.status_message.config(text="Filter wheel not connected.", fg="red")
+        selected_filter = self.filter_position_var.get()
+        # Check if EFW has gotten disconnected. If it has, try to connect.
+        try:
+            current_position = self.peripherals_thread.efw.GetPosition(0)
+        except:
+            self.peripherals_thread.efw = None
+            self.peripherals_thread.connect_efw()
+            if self.peripherals_thread.efw is None:
+                self.filter_position_menu.config(state='disabled')
+                self.status_message.config(text="Filter wheel not connected.", fg="red")
+            else:
+                self.filter_position_menu.config(state='normal')
+            return
+        # If EFW is connected, update the filter position if necessary.
+        if selected_filter == '':
+            current_position = self.peripherals_thread.efw.GetPosition(0)
+            self.filter_position_var.set(list(self.filter_options.keys())[current_position])
         else:
-            position = self.filter_position_options[self.filter_position_var.get()]
-            self.peripherals_thread.efw.SetPosition(0, position)
-            print(f"Filter position set to {position}.")
-        return
+            selected_position = self.filter_options[self.filter_position_var.get()]
+            if selected_position == self.peripherals_thread.efw.GetPosition(0):
+                return
+            try:
+                self.peripherals_thread.efw.SetPosition(0, selected_position)
+                print(f"Filter position set to " + self.filter_position_var.get())
+            except Exception as e:
+                print(e)
+            return
+
+    def update_outlet_states(self):
+        if self.peripherals_thread.pdu is None:
+            self.status_message.config(text="PDU not connected.", fg="red")
+            return
+        outlet_states = asyncio.run(self.peripherals_thread.get_all_outlet_states())
+        for i in range(1, 17):
+            if self.pdu_outlet_vars[i].get() != outlet_states[i - 1]:
+                # Update the variable and button state
+                self.pdu_outlet_vars[i].set(outlet_states[i - 1])
+                self.toggle_outlet(i)  # Update button appearance
+
     
     def power_cycle_camera(self):
         # Power cycle the camera by turning off and on the PDU outlet    
-        self.peripherals_thread.command_outlet(1, OutletCommand.IMMEDIATE_OFF)
+        self.peripherals_thread.command_outlet(2, OutletCommand.IMMEDIATE_OFF)
         time.sleep(1)  # Wait for 1 second before turning it back on
-        self.peripherals_thread.command_outlet(1, OutletCommand.IMMEDIATE_ON)
-        print("Camera power cycled. Will try to reconnect in 60 seconds.")
-        time.sleep(60)
-        self.reset_camera()
+        self.peripherals_thread.command_outlet(2, OutletCommand.IMMEDIATE_ON)
+        print("Camera power cycled. Will try to reconnect.")
+        self.camera_thread.stop()
+        self.camera_thread = CameraThread(self.shared_data, self.frame_queue,
+                                          self.timestamp_queue, self)
+        self.camera_thread.start()
+
+    def toggle_outlet(self, idx):
+        """Send on/off and update button color/text."""
+        time.sleep(0.1)  # Allow some time for the button state to update
+        state = self.pdu_outlet_vars[idx].get()
+        cmd = OutletCommand.IMMEDIATE_ON if state else OutletCommand.IMMEDIATE_OFF
+        # fire the PDU command
+        self.peripherals_thread.command_outlet(idx, cmd)
+        time.sleep(1)  # Allow some time for the command to take effect
+        # update the button widget (find by its grid position)
+        btn = self.pdu_outlet_buttons[idx]
+        if state:
+            btn.config(text='ON', fg='green', relief='sunken')
+        else:
+            btn.config(text='OFF', fg='red', relief='raised')
+        return
 
     def change_binning(self, selected_binning):
         if self.camera_thread.capturing:
@@ -932,6 +1095,11 @@ class CameraGUI(tk.Tk):
 
         # Ensure the OpenCV window is closed
         cv2.destroyAllWindows()
+
+        # Disconnect peripherals if they are connected
+        if hasattr(self, 'peripherals_thread'):
+            self.peripherals_thread.disconnect_peripherals()
+            self.peripherals_thread.join()
 
         # Close the GUI window
         self.destroy()
