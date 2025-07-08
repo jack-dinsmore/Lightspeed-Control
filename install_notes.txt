@@ -48,7 +48,5 @@ For CyberPower PDU41003 Control
 
 Some notes
 --------------------------------
-1. Since a GPS card is not installed yet on the main control PC, I commented out "import GPS_time"
-from GUI.py and test.py, as it was raising an error for not being able to find libmbgdevio.so
 
 Last updated 06/18/2025 by Chris Layden
