@@ -39,12 +39,22 @@ Also used PLAY to set to Dark Mode, which turns off LEDs on the SESTO SENSO 2 fo
 8. Made python script with ASCOM. A commented out section of this script opened the ASCOM Chooser. Through this Chooser, I selected PLL ASCOM Rotator,
 selected properties, and made sure this device connects to COM3. I then selected PLL ASCOM Rotator 2, selected properties, and linked this to COM4.
 9. Made ascom_rotators.py script in Documents of Windows VM that can be run to change the absolute positions of the rotators.
-To start virtual machine, open a command prompt. Type "virt-manager". Select the win10 machine, hit Open, and press the play button.
+To start virtual machine, open a command prompt. Type "virt-manager". Select the win10 machine, hit Open, and press the play button. PW is the same as
+for Lightspeed control PC.
 
 For CyberPower PDU41003 Control
 --------------------------------
 1. Downloaded Jack Haviland's PDU control code (GUI doesn't work, but rest does).
 2. Navigated to python-cyberpower-pdu. Ran "pip install -e ."
+
+For Lab Jack Shutter Control
+--------------------------------
+1. Downloaded LJM software for Linux: https://support.labjack.com/docs/ljm-software-installer-downloads-t4-t7-t8-digit
+2. Unzipped file, navigated to its folder and ran "sudo ./labjack_ljm_installer.run"
+
+For Zaber Stage Control
+--------------------------------
+1. Just ran "pip install zaber-motion"
 
 Some notes
 --------------------------------

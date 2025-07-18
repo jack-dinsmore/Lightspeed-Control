@@ -1,5 +1,6 @@
 import ctypes
 import sys
+import subprocess
 from ctypes import byref, c_int, c_uint32, c_void_p
 from astropy.time import Time
 
@@ -99,11 +100,10 @@ def clear_buffer():
     return True
 
 # Example usage
-#if __name__ == "__main__":
-#    timestamp = get_first_timestamp()
-#    if timestamp:
-#        print(f"First timestamp in Astropy format: {timestamp.iso}")
-    
+if __name__ == "__main__":
+    timestamp = get_first_timestamp()
+    if timestamp:
+       print(f"First timestamp in Astropy format: {timestamp.iso}")
     # Clear the buffer
-#    clear_buffer()
+    clear_buffer()
 

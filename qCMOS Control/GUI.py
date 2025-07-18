@@ -1,8 +1,8 @@
 import tkinter as tk
-from tkinter import StringVar, OptionMenu, Checkbutton, Label, Entry, Button, Scale, Frame, LabelFrame
+from tkinter import StringVar, OptionMenu, Checkbutton, Label, Entry, Button, Scale, Frame, LabelFrame, messagebox
 from dcam import Dcamapi, Dcam, DCAMERR
 from camera_params import CAMERA_PARAMS, DISPLAY_PARAMS
-import GPS_time  # Importing the GPS_time module
+import GPS_time
 import threading
 import time
 import numpy as np
@@ -16,6 +16,9 @@ import warnings
 from PyZWOEFW import EFW
 import asyncio
 from cyberpower_pdu import CyberPowerPDU, OutletCommand
+from labjack import ljm
+from zaber_motion import Units
+from zaber_motion.ascii import Connection
 import ctypes
 ctypes.CDLL("libudev.so.1", mode=ctypes.RTLD_GLOBAL)
 
@@ -154,10 +157,14 @@ class CameraThread(threading.Thread):
         self.set_property('EXPOSURE_TIME', 0.1)
         self.set_property('TRIGGER_SOURCE', 1.0)  # 1.0 corresponds to INTERNAL
         self.set_property('TRIGGER_MODE', 6.0)  # 6.0 corresponds to START
-        self.set_property('OUTPUT_TRIG_KIND_0', 1.0) # 1.0 corresonds to LOW
+        self.set_property('OUTPUT_TRIG_KIND_0', 2.0) # 1.0 corresonds to LOW
         self.set_property('OUTPUT_TRIG_ACTIVE_0', 1.0)
-        self.set_property('OUTPUT_TRIG_POLARITY_0', 2.0)
+        self.set_property('OUTPUT_TRIG_POLARITY_0', 1.0)
         self.set_property('OUTPUT_TRIG_PERIOD_0', 1.0)
+        self.set_property('OUTPUT_TRIG_KIND_1', 1.0) # 1.0 corresonds to LOW
+        self.set_property('OUTPUT_TRIG_ACTIVE_1', 1.0)
+        self.set_property('OUTPUT_TRIG_POLARITY_1', 2.0)
+        self.set_property('OUTPUT_TRIG_PERIOD_1', 1.0)
         self.set_property('SENSOR_MODE', 18.0)
         self.set_property('IMAGE_PIXEL_TYPE', 1.0)
 
@@ -383,7 +390,8 @@ class SaveThread(threading.Thread):
         # Do not call self.join() here; let the calling code handle it
 
 class PeripheralsThread(threading.Thread):
-    def __init__(self, shared_data, frame_queue, timestamp_queue, pdu_ip, gui_ref):
+    def __init__(self, shared_data, frame_queue, timestamp_queue, pdu_ip,
+                 xmcc1_port, xmcc2_port, gui_ref):
         super().__init__()
         self.shared_data = shared_data
         self.frame_queue = frame_queue
@@ -392,6 +400,14 @@ class PeripheralsThread(threading.Thread):
         self.efw = None # ZWO 7-position filter wheel
         self.pdu_ip = pdu_ip  # IP address for the CyberPower PDU
         self.pdu = None
+        self.ljm_handle = None
+        self.xmcc1_port = xmcc1_port
+        self.xmcc2_port = xmcc2_port
+        self.ax_a_1 = None # Zaber X-MCC1, 1st axis (slit)
+        self.ax_a_2 = None # Zaber X-MCC1, 2nd axis (focus stepper)
+        self.ax_b_1 = None # Zaber X-MCC2, 1st axis (Halpha/QWP)
+        self.ax_b_2 = None # Zaber X-MCC2, 2nd axis (polarization)
+        self.ax_b_3 = None # Zaber X-MCC2, 3rd axis (zoom stepper)
 
     def run(self):
         # Run the connection process in a separate thread to avoid blocking the GUI
@@ -402,23 +418,98 @@ class PeripheralsThread(threading.Thread):
 
     async def connect_peripherals(self):
         self.connect_efw()
+        self.connect_zaber_axes()
         print("Connecting to CyberPower PDU...")
         try:
             self.pdu = CyberPowerPDU(ip_address=self.pdu_ip, simulate=False)
             await self.pdu.initialize()
         except:
             print("Failed to connect to CyberPower PDU.")
+        self.connect_labjack()
+
+    def connect_labjack(self):
+        try:
+            self.ljm_handle = ljm.openS("T4", "ANY", "ANY")
+        except:
+            print("Failed to connect to LabJack.")
 
     def connect_efw(self):
         print("Connecting to ZWO filter wheel...")
         try:
-            self.efw = EFW()
+            self.efw = EFW(verbose=False)
             # Need to read the position before setting position will work
             self.efw.GetPosition(0)
             print("ZWO filter wheel connected successfully.")
         except Exception as e:
             print(f"Failed to connect to ZWO filter wheel: {e}")
             self.efw = None
+
+    def connect_zaber_axes(self):
+        print("Connecting to linear stages and stepper motors...")
+        try:
+            self.connection_a = Connection.open_serial_port(self.xmcc1_port)
+            self.connection_a.enable_alerts()
+            self.xmcc_a = self.connection_a.detect_devices()[0]
+        except Exception as e:
+            self.connection_a = None
+            self.xmcc_a = None
+            self.ax_a_1 = None
+            self.ax_a_2 = None
+            print(f"Failed to connect to Zaber X-MCC1: {e}")
+            print("No control available for slit stage or focus stepper.")
+        try:
+            self.connection_b = Connection.open_serial_port(self.xmcc2_port)
+            self.connection_b.enable_alerts()
+            self.xmcc_b = self.connection_b.detect_devices()[0]
+        except Exception as e:
+            self.connection_b = None
+            self.xmcc_b = None
+            self.ax_b_1 = None
+            self.ax_b_2 = None
+            self.ax_b_3 = None
+            print(f"Failed to connect to Zaber X-MCC2: {e}")
+            print("No control available for Halpha/QWP stage, polarization stage, or zoom stepper.")
+        if self.xmcc_a is not None:
+            self.ax_a_1 = self.xmcc_a.get_axis(1)  # Slit stage
+            self.ax_a_2 = self.xmcc_a.get_axis(2)  # Focus stepper
+            try:
+                self.ax_a_1.get_position(Units.LENGTH_MILLIMETRES)
+                print("Slit stage connected successfully.")
+            except Exception as e:
+                print(f"Failed to get position for slit stage: {e}")
+                self.ax_a_1 = None
+            try:
+                self.ax_a_2.get_position(Units.ANGLE_DEGREES)
+                print("Focus stepper connected successfully.")
+                if self.gui_ref is not None:
+                    current_focus_position = (self.ax_a_2.get_position(Units.ANGLE_DEGREES) *
+                                              self.gui_ref.focus_conversion_factor)
+                    self.gui_ref.focus_position_var.set(str(current_focus_position))
+            except Exception as e:
+                print(f"Failed to get position for focus stepper: {e}")
+                self.ax_a_2 = None
+        if self.xmcc_b is not None:
+            self.ax_b_1 = self.xmcc_b.get_axis(1)  # Halpha/QWP stage
+            self.ax_b_2 = self.xmcc_b.get_axis(2)  # Polarization stage
+            self.ax_b_3 = self.xmcc_b.get_axis(3)  # Zoom stepper
+            try:
+                self.ax_b_1.get_position(Units.LENGTH_MILLIMETRES)
+                print("Halpha/QWP stage connected successfully.")
+            except Exception as e:
+                print(f"Failed to get position for Halpha/QWP stage: {e}")
+                self.ax_b_1 = None
+            try:
+                self.ax_b_2.get_position(Units.LENGTH_MILLIMETRES)
+                print("Polarization stage connected successfully.")
+            except Exception as e:
+                print(f"Failed to get position for polarization stage: {e}")
+                self.ax_b_2 = None
+            try:
+                self.ax_b_3.get_position(Units.ANGLE_DEGREES)
+                print("Zoom stepper connected successfully.")
+            except Exception as e:
+                print(f"Failed to get position for zoom stepper: {e}")
+                self.ax_b_3 = None
 
     def disconnect_peripherals(self):
         print("Disconnecting peripherals...")
@@ -439,6 +530,21 @@ class PeripheralsThread(threading.Thread):
                 print(f"Failed to disconnect CyberPower PDU: {e}")
         else:
             print("CyberPower PDU was not connected.")
+
+        if self.ljm_handle is not None:
+            ljm.close(self.ljm_handle)
+
+        if self.connection_a is not None:
+            try:
+                self.connection_a.close()
+            except Exception as e:
+                print(f"Failed to disconnect Zaber X-MCCA: {e}")
+        if self.connection_b is not None:
+            try:
+                self.connection_b.close()
+            except Exception as e:
+                print(f"Failed to disconnect Zaber X-MCCB: {e}")
+
 
     def command_outlet(self, outlet, command):
         if self.pdu is not None:
@@ -479,7 +585,7 @@ class CameraGUI(tk.Tk):
         self.min_val = tk.StringVar(value="0")  # Initial min percentile set to 0%
         self.max_val = tk.StringVar(value="200")  # Initial max percentile set to 200%
 
-        self.title("Camera Parameters")
+        self.title("Lightspeed Prototype Control GUI")
         self.geometry("1000x1000")  # Adjust window size to tighten the layout
 
         # GUI code snippet
@@ -536,20 +642,10 @@ class CameraGUI(tk.Tk):
         self.cube_size_entry = Entry(camera_controls_frame, textvariable=self.cube_size_var)
         self.cube_size_entry.grid(row=5, column=1)
 
-        # Make menu to select output trigger kind
-        Label(camera_controls_frame, text="Shutter:").grid(row=6, column=0)
-        self.output_trigger_kind_var = tk.StringVar()
-        self.output_trigger_kind_var.set('Open')
-        self.output_trigger_kind_options = {'Open': 1, 'Closed': 5}
-        self.output_trigger_kind_menu = OptionMenu(camera_controls_frame, self.output_trigger_kind_var,
-                                                   *self.output_trigger_kind_options.keys(),
-                                                   command=self.update_output_trigger)
-        self.output_trigger_kind_menu.grid(row=6, column=1)
-
         # Make button to power cycle camera by turning off and on PDU outlet 1
         self.power_cycle_button = Button(camera_controls_frame, text="Power Cycle Camera",
                                          command=self.power_cycle_camera)
-        self.power_cycle_button.grid(row=7, column=0, columnspan=2)
+        self.power_cycle_button.grid(row=6, column=0, columnspan=2)
 
         # Camera Settings
         camera_settings_frame = LabelFrame(self.main_frame, text="Camera Settings", padx=5, pady=5)
@@ -666,16 +762,72 @@ class CameraGUI(tk.Tk):
         self.peripherals_controls_frame.grid(row=5, column=1, sticky='n')
 
         # Make menu to select filter position
-        Label(self.peripherals_controls_frame, text="Filter Position:").grid(row=0, column=1)
+        Label(self.peripherals_controls_frame, text="Filter:").grid(row=0, column=0)
         self.filter_position_var = tk.StringVar()
         self.filter_options = {'0 (Open)': 0, '1 (u\')': 1, '2 (g\')': 2, '3 (r\')': 3,
                                         '4 (i\')': 4, '5 (z\')': 5}
         self.filter_position_menu = OptionMenu(self.peripherals_controls_frame, self.filter_position_var,
                                                *self.filter_options.keys(),
                                                command=self.update_filter_position)
-        self.filter_position_menu.grid(row=0, column=2)
+        self.filter_position_menu.grid(row=0, column=1)
 
-        Label(self.peripherals_controls_frame, text="PDU Outlet States").grid(row=1, column=0, columnspan=4)
+        # Make menu to open or close shutter
+        Label(self.peripherals_controls_frame, text="Shutter:").grid(row=0, column=2)
+        self.shutter_var = tk.StringVar()
+        self.shutter_var.set('Open')
+        self.shutter_options = ['Open', 'Closed']
+        self.shutter_menu = OptionMenu(self.peripherals_controls_frame, self.shutter_var,
+                                       *self.shutter_options, command=self.update_shutter)
+        self.shutter_menu.grid(row=0, column=3)
+
+        # Make menu to select whether slit should be in or out of the beam
+        Label(self.peripherals_controls_frame, text="Slit:").grid(row=1, column=0)
+        self.slit_position_var = tk.StringVar()
+        self.slit_position_var.set('Out of beam')
+        self.slit_options = ['In beam', 'Out of beam']
+        self.slit_position_menu = OptionMenu(self.peripherals_controls_frame, self.slit_position_var,
+                                             *self.slit_options, command=self.update_slit_position)
+        self.slit_position_menu.grid(row=1, column=1)
+
+        # Make menu to select whether Halpha filter, QWP, or neither should be in the beam
+        Label(self.peripherals_controls_frame, text="Halpha/QWP:").grid(row=1, column=2)
+        self.halpha_qwp_var = tk.StringVar()
+        self.halpha_qwp_var.set('Neither')
+        self.halpha_qwp_options = ['Halpha', 'QWP', 'Neither']
+        self.halpha_qwp_menu = OptionMenu(self.peripherals_controls_frame, self.halpha_qwp_var,
+                                          *self.halpha_qwp_options, command=self.update_halpha_qwp)
+        self.halpha_qwp_menu.grid(row=1, column=3)
+
+        # Make menu to select whether WeDoWo, Wire Grid, or neither should be in the beam
+        Label(self.peripherals_controls_frame, text="Pol. Stage:").grid(row=2, column=0)
+        self.wire_grid_var = tk.StringVar()
+        self.wire_grid_var.set('Neither')
+        self.wire_grid_options = ['WeDoWo', 'Wire Grid', 'Neither']
+        self.wire_grid_menu = OptionMenu(self.peripherals_controls_frame, self.wire_grid_var,
+                                         *self.wire_grid_options, command=self.update_pol_stage)
+        self.wire_grid_menu.grid(row=2, column=1)
+
+        # Make menu for zoom stepper motor options
+        Label(self.peripherals_controls_frame, text="Zoom-out:").grid(row=2, column=2)
+        self.zoom_stepper_var = tk.StringVar()
+        self.zoom_stepper_var.set('4x')
+        self.zoom_stepper_options = ['1x', '2x', '3x', '4x']
+        self.zoom_stepper_menu = OptionMenu(self.peripherals_controls_frame, self.zoom_stepper_var,
+                                            *self.zoom_stepper_options, command=self.update_zoom_stepper)
+        self.zoom_stepper_menu.grid(row=2, column=3)
+
+        # Make box to specify focus position. Only set focus when a button is pressed.
+        Label(self.peripherals_controls_frame, text="Focus Position (um):").grid(row=3, column=0, columnspan=2)
+        self.focus_position_var = tk.StringVar()
+        self.focus_position_var.set('0')  # Default focus position
+        self.focus_conversion_factor = 1  # Microns of focus per degree of stepper motor turn ZZZ need to measure this
+        self.focus_position_entry = Entry(self.peripherals_controls_frame, textvariable=self.focus_position_var)
+        self.focus_position_entry.grid(row=3, column=2)
+        self.set_focus_button = Button(self.peripherals_controls_frame, text="Set Focus",
+                                       command=self.update_focus_position)
+        self.set_focus_button.grid(row=3, column=3)
+
+        Label(self.peripherals_controls_frame, text="PDU Outlet States").grid(row=4, column=0, columnspan=4)
         # Make set of 16 switches to control the CyberPower PDU outlets
         self.pdu_outlet_dict = {1: 'Empty', 2: 'qCMOS', 3: 'Empty', 4: 'Empty',
                                 5: 'Empty', 6: 'Empty', 7: 'Empty', 8: 'Empty',
@@ -683,12 +835,9 @@ class CameraGUI(tk.Tk):
                                 13: 'Empty', 14: 'Empty', 15: 'Empty', 16: 'Shutter'}
         self.pdu_outlet_vars = {}
         self.pdu_outlet_buttons = {}
-        # Make a button for each outlet. Should be green and depressed with 'ON' text when outlet is on, red and raised with 'OFF' text when outlet is off.
-        # Text next to each should be on left and come from self.pdu_outlet_dict. Adjust spacing so all text is aligned.
-        # Make a button for each outlet. Should be green/'ON' when on, red/'OFF' when off.
         for idx, name in self.pdu_outlet_dict.items():
             # eight outlets per column, two columns
-            row = (idx - 1) % 8 + 2
+            row = (idx - 1) % 8 + 8
             col = (idx - 1) // 8 * 2
             name = str(idx) + ': ' + name  # Add outlet number to the name
             # label on left
@@ -743,6 +892,11 @@ class CameraGUI(tk.Tk):
     def refresh_peripherals_status(self):
         self.update_filter_position()
         self.update_outlet_states()
+        self.update_shutter()
+        self.update_slit_position()
+        self.update_halpha_qwp()
+        self.update_pol_stage()
+        self.update_zoom_stepper()
 
     def process_frame(self, data):
         # Handle both 8-bit and 16-bit data
@@ -819,13 +973,28 @@ class CameraGUI(tk.Tk):
             print("Invalid number of frames per cube. Setting to 100.")
             self.batch_size = 100
 
-    def update_output_trigger(self, *_):
-        if self.camera_thread.capturing:
-            print("Cannot change output trigger during active capture.")
-            self.status_message.config(text="Cannot change output trigger during active capture.")
+    def update_shutter(self, *_):
+        # Check that LabJack is connected.
+        if self.peripherals_thread.ljm_handle is None:
+            self.peripherals_thread.connect_labjack()
+            if self.peripherals_thread.ljm_handle is None:
+                return
+        # Status of the DIO4 port controlling the shutter
+        mask = ljm.eReadName(self.peripherals_thread.ljm_handle, "FIO_STATE")
+        fio4_state = (int(mask) >> 4) & 1
+        if fio4_state == 0:
+            shutter_state = 'Open'
+        elif fio4_state == 1:
+            shutter_state = 'Closed'
         else:
-            trigger_kind = self.output_trigger_kind_options[self.output_trigger_kind_var.get()]
-            self.camera_thread.set_property('OUTPUT_TRIG_KIND_0', trigger_kind)
+            print('LabJack malfunction. DIO4 state ', fio4_state)
+        if self.shutter_var.get() == shutter_state:
+            return
+        if self.shutter_var.get() == 'Open':
+            ljm.eWriteName(self.peripherals_thread.ljm_handle, "DIO4", 0)
+        elif self.shutter_var.get() == 'Closed':
+            ljm.eWriteName(self.peripherals_thread.ljm_handle, "DIO4", 1)
+                
 
     def update_filter_position(self, *_):
         selected_filter = self.filter_position_var.get()
@@ -865,7 +1034,7 @@ class CameraGUI(tk.Tk):
             if self.pdu_outlet_vars[i].get() != outlet_states[i - 1]:
                 # Update the variable and button state
                 self.pdu_outlet_vars[i].set(outlet_states[i - 1])
-                self.toggle_outlet(i)  # Update button appearance
+                self.toggle_outlet(i, override=True)  # Update button appearance
 
     
     def power_cycle_camera(self):
@@ -879,10 +1048,104 @@ class CameraGUI(tk.Tk):
                                           self.timestamp_queue, self)
         self.camera_thread.start()
 
-    def toggle_outlet(self, idx):
+    def update_slit_position(self, *_):
+        if self.peripherals_thread.ax_a_1 is None:
+            self.status_message.config(text="Slit stage not connected.", fg="red")
+            # Make slit menu disabled
+            self.slit_position_menu.config(state='disabled')
+            return
+        slit_option = self.slit_position_var.get()
+        curr_slit_pos = self.peripherals_thread.ax_a_1.get_position(Units.LENGTH_MILLIMETRES)
+        if slit_option == 'In beam' and abs(curr_slit_pos - 70) > 0.01:
+            print("Moving slit in beam.")
+            self.peripherals_thread.ax_a_1.move_absolute(70, Units.LENGTH_MILLIMETRES)
+        elif slit_option == 'Out of beam' and abs(curr_slit_pos) > 0.01:
+            print("Moving slit out of beam.")
+            self.peripherals_thread.ax_a_1.move_absolute(0, Units.LENGTH_MILLIMETRES)
+    
+    def update_halpha_qwp(self, *_):
+        if self.peripherals_thread.ax_b_1 is None:
+            self.status_message.config(text="Halpha/QWP stage not connected.", fg="red")
+            # Make Halpha/QWP menu disabled and blank
+            self.halpha_qwp_var.set('')
+            self.halpha_qwp_menu.config(state='disabled')
+            return
+        halpha_qwp_option = self.halpha_qwp_var.get()
+        curr_halpha_qwp_pos = self.peripherals_thread.ax_b_1.get_position(Units.LENGTH_MILLIMETRES)
+        if halpha_qwp_option == 'Halpha' and abs(curr_halpha_qwp_pos - 70) > 0.01:
+            print("Moving Halpha filter in beam.")
+            self.peripherals_thread.ax_b_1.move_absolute(70, Units.LENGTH_MILLIMETRES)
+        elif halpha_qwp_option == 'QWP' and abs(curr_halpha_qwp_pos - 140) > 0.01:
+            print("Moving QWP in beam.")
+            self.peripherals_thread.ax_b_1.move_absolute(140, Units.LENGTH_MILLIMETRES)
+        elif halpha_qwp_option == 'Neither' and abs(curr_halpha_qwp_pos) > 0.01:
+            print("Moving Halpha filter and QWP out of beam.")
+            self.peripherals_thread.ax_b_1.move_absolute(0, Units.LENGTH_MILLIMETRES)
+
+    def update_pol_stage(self, *_):
+        if self.peripherals_thread.ax_b_2 is None:
+            self.status_message.config(text="Polarization stage not connected.", fg="red")
+            # Make wire grid menu disabled and blank
+            self.wire_grid_var.set('')
+            self.wire_grid_menu.config(state='disabled')
+            return
+        wire_grid_option = self.wire_grid_var.get()
+        curr_wire_grid_pos = self.peripherals_thread.ax_b_2.get_position(Units.LENGTH_MILLIMETRES)
+        if wire_grid_option == 'WeDoWo' and abs(curr_wire_grid_pos - 70) > 0.01:
+            print("Moving WeDoWo in beam.")
+            self.peripherals_thread.ax_b_2.move_absolute(70, Units.LENGTH_MILLIMETRES)
+        elif wire_grid_option == 'Wire Grid' and abs(curr_wire_grid_pos - 140) > 0.01:
+            print("Moving Wire Grid in beam.")
+            self.peripherals_thread.ax_b_2.move_absolute(140, Units.LENGTH_MILLIMETRES)
+        elif wire_grid_option == 'Neither' and abs(curr_wire_grid_pos) > 0.01:
+            print("Moving WeDoWo and Wire Grid out of beam.")
+            self.peripherals_thread.ax_b_2.move_absolute(0, Units.LENGTH_MILLIMETRES)
+
+    def update_zoom_stepper(self, *_):
+        if self.peripherals_thread.ax_b_2 is None:
+            self.status_message.config(text="Zoom stepper not connected.", fg="red")
+            # Make zoom stepper menu disabled and blank
+            self.zoom_stepper_var.set('')
+            self.zoom_stepper_menu.config(state='disabled')
+            return
+        zoom_option = self.zoom_stepper_var.get()
+        zoom_positions = {'1x': 0, '2x': 90, '3x': 180, '4x': 270}
+        desired_position = zoom_positions[zoom_option]
+        curr_zoom_pos = self.peripherals_thread.ax_b_2.get_position(Units.ANGLE_DEGREES)
+        if abs(curr_zoom_pos - desired_position) < 0.01:
+            return
+        else:
+            print(f"Moving zoom stepper to {zoom_option}.")
+            self.peripherals_thread.ax_b_2.move_absolute(desired_position, Units.ANGLE_DEGREES)
+    
+    def update_focus_position(self, *_):
+        if self.peripherals_thread.ax_a_2 is None:
+            self.status_message.config(text="Focus stage not connected.", fg="red")
+            # disable focus position entry and button
+            self.focus_position_entry.config(state='disabled')
+            self.set_focus_button.config(state='disabled')
+            return
+        focus_position = float(self.focus_position_var.get()) # in um
+        curr_stepper_pos = self.peripherals_thread.ax_a_2.get_position(Units.ANGLE_DEGREES)
+        desired_stepper_pos = focus_position / self.focus_conversion_factor
+        if abs(curr_stepper_pos - desired_stepper_pos) < 0.01:
+            return
+        else:
+            print(f"Moving focus stage to {focus_position} um.")
+            self.peripherals_thread.ax_a_2.move_absolute(desired_stepper_pos, Units.ANGLE_DEGREES)
+
+    def toggle_outlet(self, idx, override=False):
         """Send on/off and update button color/text."""
         time.sleep(0.1)  # Allow some time for the button state to update
         state = self.pdu_outlet_vars[idx].get()
+        if not override:
+            # If not overriding, check that user actually wants to toggle
+            confirm_button = messagebox.askyesno("Confirm Outlet Toggle",
+                                                 f"Are you sure you want to turn {'ON' if state else 'OFF'} outlet {idx}?")
+            if not confirm_button:
+                # If user cancels, reset the button state
+                self.pdu_outlet_vars[idx].set(not state)
+                return
         cmd = OutletCommand.IMMEDIATE_ON if state else OutletCommand.IMMEDIATE_OFF
         # fire the PDU command
         self.peripherals_thread.command_outlet(idx, cmd)
@@ -1122,7 +1385,8 @@ if __name__ == "__main__":
     camera_thread.start()
 
     # Initialize peripheral devices
-    peripherals_thread = PeripheralsThread(shared_data, frame_queue, timestamp_queue, "18.25.72.251", app)
+    peripherals_thread = PeripheralsThread(shared_data, frame_queue, timestamp_queue,
+                                           "18.25.72.251", "/dev/ttyACM0", "/dev/ttyACM1", app)
     peripherals_thread.start()
 
     app.camera_thread = camera_thread
