@@ -1,8 +1,8 @@
 import tkinter as tk
 from tkinter import StringVar, OptionMenu, Checkbutton, Label, Entry, Button, Scale, Frame, LabelFrame, messagebox
-from dcam import Dcamapi, Dcam, DCAMERR
+# from dcam import Dcamapi, Dcam, DCAMERR
 from camera_params import CAMERA_PARAMS, DISPLAY_PARAMS
-import GPS_time
+# import GPS_time
 import threading
 import time
 import numpy as np
@@ -13,14 +13,18 @@ from datetime import datetime
 from astropy.time import Time
 import os
 import warnings
+
+import sys
+sys.path.append("../PyZWOEFW-main")
+
 from PyZWOEFW import EFW
 import asyncio
-from cyberpower_pdu import CyberPowerPDU, OutletCommand
-from labjack import ljm
-from zaber_motion import Units
-from zaber_motion.ascii import Connection
+# from cyberpower_pdu import CyberPowerPDU, OutletCommand
+# from labjack import ljm
+# from zaber_motion import Units
+# from zaber_motion.ascii import Connection
 import ctypes
-ctypes.CDLL("libudev.so.1", mode=ctypes.RTLD_GLOBAL)
+# ctypes.CDLL("libudev.so.1", mode=ctypes.RTLD_GLOBAL)
 
 
 class SharedData:
