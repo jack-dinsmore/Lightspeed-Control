@@ -9,6 +9,21 @@ from astropy.time import Time
 import cv2
 import queue
 
+LC_WINDOW_SIZE = (550, 300)
+LC_LEFT_BOUND = 50 # left bound of the plot
+LC_LOWER_BOUND = LC_WINDOW_SIZE[1]-40 # Lower bound of the plot
+STRETCH_SEVERITY=10
+IMAGE_BOTTOM_BUFFER=50
+
+def show_span(image, r, color):
+    plot_width = LC_WINDOW_SIZE[0] - LC_LEFT_BOUND
+    if r is None:
+        return
+    
+    x_min = int(np.round(LC_LEFT_BOUND + plot_width*r[0]))
+    x_max = int(np.round(LC_LEFT_BOUND + plot_width*r[1]))
+    cv2.rectangle(image, (x_min, 0), (x_max, LC_LOWER_BOUND), color, -1)
+
 def get_tk_value(tk_value):
     try:
         return tk_value.get()
@@ -25,6 +40,7 @@ class RollingBuffer:
         self.data_index = 0
         self.data_valid = np.zeros(limit, bool) # Start with every data set not being valid
 
+        # The images are combined into "chunks" to reduce size in memory. A chunk is 1/50 of the full buffer.
         chunk_limit = limit//50 + 1 # The number of images to stack into a chunk before adding the chunk to the buffer
         self.current_chunk = np.zeros((chunk_limit, *image_size))
         self.chunk_index = 0
@@ -93,28 +109,6 @@ class RollingBuffer:
         self.data_index = new_data_index
         self.data = new_data
         self.data_valid = new_data_valid
-
-class PhaseRangePlot:
-    def __init__(self, ax, color, label):
-        self.span1 = ax.axvspan(-1, -0.5, color=color, label=label, alpha=0.3)
-        self.span2 = ax.axvspan(-1, -0.5, color=color, alpha=0.3)
-
-    def update(self, phase_range):
-        if phase_range is None:
-            self.span1.set_x(-1)
-            self.span1.set_width(0.5)
-            self.span2.set_x(-1)
-            self.span2.set_width(0.5)
-        elif phase_range[1] >= phase_range[0]:
-            self.span1.set_x(phase_range[0])
-            self.span1.set_width(phase_range[1] - phase_range[0])
-            self.span2.set_x(-1)
-            self.span2.set_width(0.5)
-        else:
-            self.span1.set_x(0)
-            self.span1.set_width(phase_range[1])
-            self.span2.set_x(phase_range[0])
-            self.span2.set_width(1 - phase_range[0])
         
 def check_phase(phase, phase_range):
     """
@@ -148,18 +142,19 @@ class PhaseGUI(tk.Tk):
         self.off_range = None # Off phase range
         self.temporary_range = None # Temporary range used by the UI when setting a new range
 
-        self.on_image = None # To be initialized later
+        self.total_image = None # To be initialized later
+        self.on_image = None
         self.off_image = None
         self.lc_fluxes = None
         self.lc_phase_bin_edges = None
 
         self.lc_window_created = False
-        self.on_window_created = False
-        self.off_window_created = False
+        self.image_window_created = False
+        self.stretch = (0.5, 0.5)
 
         # Set up GUI main frame
         self.title("Lightspeed Phasing GUI")
-        self.geometry("350x450")  # Adjust window size to tighten the layout
+        self.geometry("350x500")  # Adjust window size to tighten the layout
         self.main_frame = tk.Frame(self)
         self.main_frame.pack(expand=True, fill='both', padx=10, pady=10)
         self.main_frame.grid_columnconfigure(0, weight=1)
@@ -232,23 +227,11 @@ class PhaseGUI(tk.Tk):
         # Instructions
         lc_params_frame = LabelFrame(self.main_frame, text="Instructions", padx=5, pady=5)
         lc_params_frame.grid(row=2, column=0, sticky='nsew')
-        Label(lc_params_frame, text="Click in the image to set the lightcurve ROI").grid(row=0, column=0)
-        Label(lc_params_frame, text="Then click and drag in the LC to set \"on\" range").grid(row=1, column=0)
-        Label(lc_params_frame, text="Hold shift to set the \"off\" range").grid(row=2, column=0)
-        Label(lc_params_frame, text="The on window shows the phase-subtracted image").grid(row=3, column=0)
-
-        # Lightcurve plot
-        self.lc_fig, self.lc_ax = plt.subplots(figsize=(6,4), dpi=60)
-        self.lc_line = self.lc_ax.step([], [], color='k', where='mid')[0]
-        self.lc_ebar = self.lc_ax.errorbar([], [], [], color='k', lw=1, ls='none')
-        self.lc_on_span = PhaseRangePlot(self.lc_ax, color='C0', label="On")
-        self.lc_off_span = PhaseRangePlot(self.lc_ax, color='C1', label="Off")
-        self.lc_temporary_span = PhaseRangePlot(self.lc_ax, color='gray', label=None)
-        self.lc_ax.legend()
-        self.lc_ax.set_xlim(0, 1)
-        self.lc_ax.set_xlabel("Phase")
-        self.lc_ax.set_ylabel("Normalized flux")
-        self.lc_fig.tight_layout()
+        Label(lc_params_frame, text="Stretch the image with CTRL+click").grid(row=0, column=0)
+        Label(lc_params_frame, text="Click in the image to set the lightcurve ROI").grid(row=1, column=0)
+        Label(lc_params_frame, text="Then click and drag in the LC to set \"on\" range").grid(row=2, column=0)
+        Label(lc_params_frame, text="Hold shift & click and drag to set the \"off\" range").grid(row=3, column=0)
+        Label(lc_params_frame, text="The bottom image shows on minus off").grid(row=4, column=0)
 
         # Initialize data
         if type(feed) is SavedDataThread:
@@ -294,14 +277,23 @@ class PhaseGUI(tk.Tk):
 
     def on_event_image(self, event, x, y, flags, param):
         left_down = (flags & cv2.EVENT_FLAG_LBUTTON)!=0
+        control_down = (flags & cv2.EVENT_FLAG_CTRLKEY)!=0
         if event == cv2.EVENT_LBUTTONDOWN or (event == cv2.EVENT_MOUSEMOVE and left_down):
-            self.roi_moved = (x, y)
+            if control_down:
+                self.stretch = [
+                    (x/(self.image_shape[1])),
+                    (y/(self.image_shape[0]*2+1+IMAGE_BOTTOM_BUFFER))
+                ]
+            else:
+                # Place ROI
+                if y >= 0:
+                    self.roi_moved = (x, y % self.image_shape[0])
 
     def on_event_lc(self, event, x, y, flags, param):
         shift_down = (flags & cv2.EVENT_FLAG_SHIFTKEY)!=0
         left_down = (flags & cv2.EVENT_FLAG_LBUTTON)!=0
 
-        mouse_phase = self.lc_ax.transData.inverted().transform((x, y))[0]
+        mouse_phase = (float(x) - LC_LEFT_BOUND) / (LC_WINDOW_SIZE[0] - LC_LEFT_BOUND)
         if 0 > mouse_phase or mouse_phase > 1:
             return
         
@@ -324,6 +316,7 @@ class PhaseGUI(tk.Tk):
     def extend_buffers(self):
         buffer_frame_size = self.get_buffer_size()
         self.lc_fluxes.extend(buffer_frame_size)
+        self.total_image.extend(buffer_frame_size)
         self.on_image.extend(buffer_frame_size)
         self.off_image.extend(buffer_frame_size)
 
@@ -364,9 +357,11 @@ class PhaseGUI(tk.Tk):
     def clear_image(self):
         if self.on_image is None or self.off_image is None:
             buffer_frame_size = self.get_buffer_size()
-            self.on_image = RollingBuffer(buffer_frame_size, self.image_shape) # On data
-            self.off_image = RollingBuffer(buffer_frame_size, self.image_shape) # Off data
+            self.total_image = RollingBuffer(buffer_frame_size, self.image_shape)
+            self.on_image = RollingBuffer(buffer_frame_size, self.image_shape)
+            self.off_image = RollingBuffer(buffer_frame_size, self.image_shape)
         else:
+            self.total_image.clear()
             self.on_image.clear()
             self.off_image.clear()
 
@@ -388,23 +383,108 @@ class PhaseGUI(tk.Tk):
         self.lc_fluxes.push(lc)
 
     def process_image(self, data, timestamp):
-        if self.on_range is None or self.off_range is None:
-            # Display a stacked, single image
-            self.off_image.push(data)
-        else:
+        self.total_image.push(data)
+        if self.on_range is not None and self.off_range is not None:
             phase = self.get_phase(timestamp)
             if check_phase(phase, self.on_range):
                 self.on_image.push(data)
             if check_phase(phase, self.off_range):
                 self.off_image.push(data)
 
-    def show_image(self, window_name, image, vmin=None, vmax=None):
-        if vmin is None: vmin = np.min(image)
-        if vmax is None: vmax = np.nanpercentile(image, 95)
+    def display_lc(self):
+        if self.roi_center is None:
+            return
+        
+        if not self.lc_window_created:
+            # Create the window
+            cv2.namedWindow('Lightcurve', cv2.WINDOW_NORMAL)
+            cv2.setMouseCallback('Lightcurve', self.on_event_lc)
+            self.lc_window_created = True
+
+        plot_width = LC_WINDOW_SIZE[0]-LC_LEFT_BOUND # left bound of the plot
+        lc_fluxes = self.lc_fluxes.get()
+        lc_errorbar = np.sqrt(lc_fluxes)
+        if np.mean(lc_fluxes) > 0:
+            lc_errorbar /= np.mean(lc_fluxes)
+            lc_fluxes /= np.mean(lc_fluxes)
+        vmin = 0.9*np.min(lc_fluxes)
+        vmax = 1.1*np.max(lc_fluxes) + 1e-5
+
+        image = np.zeros((LC_WINDOW_SIZE[1], LC_WINDOW_SIZE[0], 3), np.uint8)
+
+        # Show spans
+        show_span(image, self.off_range, (0, 128, 255))
+        show_span(image, self.on_range, (255,128,128))
+        show_span(image, self.temporary_range, (128,128,128))
+        cv2.rectangle(image, (LC_WINDOW_SIZE[0]-60,22), (LC_WINDOW_SIZE[0]-5,5), (0,0,0), -1)
+        cv2.putText(image, 'Off', (LC_WINDOW_SIZE[0]-30,20), cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 128, 255), 1, cv2.LINE_AA)
+        cv2.putText(image, 'On', (LC_WINDOW_SIZE[0]-60,20), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255,128,128), 1, cv2.LINE_AA)
+
+        hist_pts = []
+        for i, flux in enumerate(lc_fluxes):
+            # Plot the LC
+            start_x = LC_LEFT_BOUND + int(np.round(self.lc_phase_bin_edges[i] * plot_width))
+            end_x = LC_LEFT_BOUND + int(np.round(self.lc_phase_bin_edges[i+1] * plot_width))
+            y = LC_LOWER_BOUND - int(np.round((flux - vmin) / (vmax - vmin) * LC_LOWER_BOUND))
+            hist_pts.append((start_x, y))
+            hist_pts.append((end_x, y))
+
+            # Show errorbar
+            mid_x = (start_x + end_x) // 2
+            barh = int(np.round(LC_LOWER_BOUND * lc_errorbar[i] / (vmax - vmin)))
+            cv2.line(image, (mid_x, y+barh), (mid_x, y-barh), (255, 255, 255))
+        hist_pts = np.array(hist_pts, np.int32).reshape(-1,1,2)
+        cv2.polylines(image, [hist_pts], False, (255, 255, 255), 2)
+
+        # Show x ticks
+        for tick in np.linspace(0, 1, 11):
+            x = LC_LEFT_BOUND + int(np.round(plot_width * tick))
+            tick_height = 5
+            cv2.line(image, (x, LC_LOWER_BOUND), (x, LC_LOWER_BOUND-tick_height), (255, 255, 255))
+
+        # Show spine
+        cv2.line(image, (LC_LEFT_BOUND, LC_LOWER_BOUND), (LC_WINDOW_SIZE[0], LC_LOWER_BOUND), (255, 255, 255))
+        cv2.line(image, (LC_LEFT_BOUND, 0), (LC_LEFT_BOUND, LC_LOWER_BOUND), (255, 255, 255))
+
+        # Show ticklabels
+        cv2.putText(image, '0', (LC_LEFT_BOUND-10,LC_LOWER_BOUND+15), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
+        cv2.putText(image, '1', (LC_WINDOW_SIZE[0]-10,LC_LOWER_BOUND+15), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
+        cv2.putText(image, '0.5', (LC_LEFT_BOUND+plot_width//2-15,LC_LOWER_BOUND+15), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
+        cv2.putText(image, f'{vmax:.2f}', (LC_LEFT_BOUND-40,15), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
+        cv2.putText(image, f'{vmin:.2f}', (LC_LEFT_BOUND-40,LC_LOWER_BOUND), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
+
+        # Show axis labels
+        cv2.putText(image, 'Phase', (LC_LEFT_BOUND+plot_width//2-25,LC_LOWER_BOUND+35), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
+        label = np.zeros((25, 160, 3), np.uint8)
+        cv2.putText(label, 'Flux (Normalized)', (0,20), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
+        label = np.flip(np.transpose(label, axes=(1,0,2)), axis=0)
+        image[LC_LOWER_BOUND//2-80:LC_LOWER_BOUND//2-80 + label.shape[0], 10:10 + label.shape[1]] = label
+
+        cv2.imshow('Lightcurve', image)
+        cv2.waitKey(1)
+
+    def display_image(self):
+        if not self.image_window_created:
+            cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
+            cv2.setMouseCallback('Image', self.on_event_image)
+            self.off_window_created = True
+
+        merged_image = np.zeros((2*self.image_shape[0]+1+IMAGE_BOTTOM_BUFFER, self.image_shape[1]))
+        merged_image[:self.image_shape[0], :] = self.total_image.get()
+
+        # Add the difference image
+        if self.on_range is not None and self.off_range is not None:
+            difference_image = self.on_image.get().astype(float) / get_phase_duration(self.on_range) - self.off_image.get().astype(float) / get_phase_duration(self.off_range)
+            merged_image[self.image_shape[0]+1:2*self.image_shape[0]+1,:] = difference_image
+
+        # Show the image
+        vmin = np.min(merged_image)
+        vmax = np.max(merged_image)
         if vmin == vmax: 
-            scaled_image = np.zeros_like(image)
+            scaled_image = np.zeros_like(merged_image)
         else:
-            scaled_image = ((image - vmin) / (vmax - vmin))
+            scaled_image = ((merged_image - vmin) / (vmax - vmin))
+        scaled_image = np.exp(STRETCH_SEVERITY*(self.stretch[0]-0.5)) * (scaled_image - self.stretch[1]) + self.stretch[1]
         blur_scale = get_tk_value(self.blur_var)
         if blur_scale > 0:
             line = np.arange(-np.ceil(blur_scale)*3, np.ceil(blur_scale)*3+1)
@@ -415,73 +495,28 @@ class PhaseGUI(tk.Tk):
         scaled_image[~np.isfinite(scaled_image)] = 0
         scaled_image = np.clip(np.round(scaled_image*255), 0, 255).astype(np.uint8)
         scaled_data_bgr = cv2.cvtColor(scaled_image, cv2.COLOR_GRAY2BGR)
+
+        # Draw ROI
         if self.roi_center is not None:
             width = get_tk_value(self.width_var)
             cv2.rectangle(scaled_data_bgr,
                 (self.roi_center[0]-width//2, self.roi_center[1]-width//2),
                 (self.roi_center[0]+width//2, self.roi_center[1]+width//2),
                 (0, 255, 0), 1)
-        cv2.imshow(window_name, scaled_data_bgr)
-        cv2.waitKey(1)
+            offset = self.image_shape[0] + 1
+            cv2.rectangle(scaled_data_bgr,
+                (self.roi_center[0]-width//2, self.roi_center[1]+offset-width//2),
+                (self.roi_center[0]+width//2, self.roi_center[1]+offset+width//2),
+                (0, 255, 0), 1)
+            
+        # Draw dividing line
+        cv2.line(scaled_data_bgr, (0, self.image_shape[0]), (self.image_shape[1], self.image_shape[0]), (255,0,255))
 
-    def display_lc(self):
-        if self.roi_center is None:
-            return
-        
-        if not self.lc_window_created:
-            # Creat the window
-            cv2.namedWindow('Lightcurve', cv2.WINDOW_NORMAL)
-            cv2.setMouseCallback('Lightcurve', self.on_event_lc)
-            self.lc_window_created = True
-
-        # Set the lightcurve data
-        lc_fluxes = self.lc_fluxes.get()
-        lc_errorbar = np.sqrt(lc_fluxes)
-        if np.mean(lc_fluxes) > 0:
-            lc_errorbar /= np.mean(lc_fluxes)
-            lc_fluxes /= np.mean(lc_fluxes)
-            self.lc_ax.set_ylim(0.9*np.min(lc_fluxes), 1.1*np.max(lc_fluxes))
-        else:
-            self.lc_ax.set_ylim(0, 1)
-        bin_centers = (self.lc_phase_bin_edges[1:] + self.lc_phase_bin_edges[:-1])/2
-        self.lc_line.set_data(bin_centers, lc_fluxes)
-
-        # Update the error bars
-        self.lc_ebar[2][0].set_segments([(
-            (bin_centers[i], lc_fluxes[i] - lc_errorbar[i]),
-            (bin_centers[i], lc_fluxes[i] + lc_errorbar[i]),
-        ) for i in range(len(lc_fluxes))])
-
-        # Set the phase windows
-        self.lc_on_span.update(self.on_range)
-        self.lc_off_span.update(self.off_range)
-        self.lc_temporary_span.update(self.temporary_range)
-
-        self.lc_fig.canvas.draw()
-        img_plot = np.array(self.lc_fig.canvas.renderer.buffer_rgba())
-        cv2.imshow('Lightcurve', cv2.cvtColor(img_plot, cv2.COLOR_RGBA2BGR))
-        cv2.waitKey(1)
-
-    def display_image(self):
-        if not self.off_window_created:
-            cv2.namedWindow("Off frame", cv2.WINDOW_NORMAL)
-            cv2.setMouseCallback('Off frame', self.on_event_image)
-            self.off_window_created = True
-
-        self.show_image("Off frame", self.off_image.get())
-
-        # Show the difference image if possible
         if self.on_range is None or self.off_range is None:
-            return
-        
-        if not self.on_window_created:
-            cv2.namedWindow('On frame', cv2.WINDOW_NORMAL)
-            cv2.setMouseCallback('On frame', self.on_event_image)
-            self.on_window_created = False
+            cv2.putText(scaled_data_bgr, "N/A", (self.image_shape[1]//2-18,3*self.image_shape[0]//2+5), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
 
-        # Show the on image
-        image = self.on_image.get().astype(float) / get_phase_duration(self.on_range) - self.off_image.get().astype(float) / get_phase_duration(self.off_range)
-        self.show_image("On frame", image, vmin=0)
+        cv2.imshow("Image", scaled_data_bgr)
+        cv2.waitKey(1)
 
 
     def update_frame_display(self):
@@ -489,7 +524,7 @@ class PhaseGUI(tk.Tk):
         if self.roi_center is None:
             self.status_message.config(text="No ROI has been set", fg="red")
         elif self.on_range is None or self.off_range is None:
-            self.status_message.config(text="No on / off bins have been set", fg="red")
+            self.status_message.config(text="No on / off phase ranges have been set", fg="red")
         else:
             self.status_message.config(text="Running", fg="white")
 
@@ -501,7 +536,7 @@ class PhaseGUI(tk.Tk):
                 self.clear_lc()
                 if self.on_range is not None and self.off_range is not None:
                     # Clear the images only if they were on-off folded
-                    self.clear_images()
+                    self.clear_image()
             self.roi_moved = None
 
         if self.ranges_moved:
@@ -523,7 +558,7 @@ class PhaseGUI(tk.Tk):
         self.display_image()
 
         # Refresh
-        self.after(100, self.update_frame_display)  # About 10 FPS
+        self.after(50, self.update_frame_display)  # About 20 FPS
 
 class SavedDataThread(threading.Thread):
     def __init__(self, filename, frame_queue, timestamp_queue):
@@ -552,14 +587,15 @@ class SavedDataThread(threading.Thread):
                 self.timestamp_queue.get_nowait()
                 self.frame_queue.put_nowait(frame)
                 self.timestamp_queue.put_nowait(timestamp)
-        print("Done")
+        print("File completed")
 
 if __name__ == "__main__":
     import time
     from astropy.io import fits
 
-    # Create shared queues containing the data coming from the camera / saved data
-    QUEUE_MAXSIZE = 20
+    # Create shared queues containing the data coming from the camera / saved data.
+    # The matplotlib lightcurve is really slow, so it's important to have a fairly large queue that can save many frames as the GUI plots the lightcurve. The frames will be dumped into the image buffer later.
+    QUEUE_MAXSIZE = 100
     frame_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
     timestamp_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
 
