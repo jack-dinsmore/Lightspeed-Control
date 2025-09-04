@@ -142,7 +142,7 @@ class PhaseGUI(tk.Tk):
 
         self.roi_center = None # Center of the ROI (pix)
         self.roi_width = None # Full width of the square ROI (pix)
-        self.roi_mask = None
+        self.roi_mask = None # ROI pixel mask
         self.on_range = None # On phase range
         self.off_range = None # Off phase range
         self.temporary_range = None # Temporary range used by the UI when setting a new range
@@ -156,6 +156,7 @@ class PhaseGUI(tk.Tk):
         self.lc_window_created = False
         self.image_window_created = False
         self.stretch = (0.5, 0.5)
+        self.marker = None
 
         # Set up GUI main frame
         self.title("Lightspeed Phasing GUI")
@@ -287,12 +288,15 @@ class PhaseGUI(tk.Tk):
             if control_down:
                 self.stretch = [
                     (x/(self.image_shape[1])),
-                    (y/(self.image_shape[0]*2+1+IMAGE_BOTTOM_BUFFER))
+                    1-(y/(self.image_shape[0]*2+1+IMAGE_BOTTOM_BUFFER))
                 ]
             else:
                 # Place ROI
                 if y >= 0:
                     self.roi_moved = (x, y % self.image_shape[0])
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            # Place marker
+            self.marker = (x, y % self.image_shape[0])
 
     def on_event_lc(self, event, x, y, flags, param):
         shift_down = (flags & cv2.EVENT_FLAG_SHIFTKEY)!=0
@@ -470,21 +474,67 @@ class PhaseGUI(tk.Tk):
         cv2.imshow('Lightcurve', image)
         cv2.waitKey(1)
 
+    def apply_stretch(self, image, vmin, vmax, is_colorbar=False):
+        # Scale the image to zero to one
+        if vmin == vmax: 
+            scaled_image = np.zeros(image.shape, float)
+        else:
+            scaled_image = ((image - vmin) / (vmax - vmin))
+
+        # Blur
+        if not is_colorbar:
+            blur_scale = get_tk_value(self.blur_var)
+            if blur_scale > 0:
+                line = np.arange(-np.ceil(blur_scale)*3, np.ceil(blur_scale)*3+1)
+                xs, ys = np.meshgrid(line,line)
+                gauss = np.exp(-(xs**2 + ys**2) / (2*blur_scale**2))
+                gauss /= np.sum(gauss)
+                scaled_image = convolve(scaled_image, gauss, mode="same")
+
+        # Stretch
+        scaled_image = np.exp(STRETCH_SEVERITY*(self.stretch[1]-0.5)) * (scaled_image - self.stretch[0]) + self.stretch[0]
+
+        # Prepare for drawing
+        scaled_image[~np.isfinite(scaled_image)] = 0
+        scaled_image = np.clip(np.round(scaled_image*255), 0, 255).astype(np.uint8)
+        scaled_image = cv2.cvtColor(scaled_image, cv2.COLOR_GRAY2BGR)
+
+        if not is_colorbar:
+            # Draw markers
+            circle_radius = 8
+            if self.marker is not None:
+                cv2.circle(scaled_image, self.marker, circle_radius, (0, 255, 255), 1)
+
+            # Draw ROI
+            if self.roi_center is not None:
+                width = get_tk_value(self.width_var)
+                cv2.rectangle(scaled_image,
+                    (self.roi_center[0]-width//2, self.roi_center[1]-width//2),
+                    (self.roi_center[0]+width//2, self.roi_center[1]+width//2),
+                    (0, 255, 0), 1)
+        return scaled_image
+
     def display_image(self):
         if not self.image_window_created:
             cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
             cv2.setMouseCallback('Image', self.on_event_image)
             self.off_window_created = True
 
-        merged_image = np.zeros((2*self.image_shape[0]+1+IMAGE_BOTTOM_BUFFER, self.image_shape[1]))
-        merged_image[:self.image_shape[0], :] = self.total_image.get()
+        total_image = self.total_image.get().astype(float)
+        vmin = np.min(total_image)
+        vmax = np.max(total_image)
+        merged_image = np.zeros((2*self.image_shape[0]+1+IMAGE_BOTTOM_BUFFER, self.image_shape[1], 3), np.uint8)
+
+        stretched_total = self.apply_stretch(total_image, vmin, vmax)
+        merged_image[:self.image_shape[0], :, :] = stretched_total
 
         # Add the difference image
         if self.on_range is not None and self.off_range is not None:
             on_image = self.on_image.get().astype(float)
             off_image = self.off_image.get().astype(float)
             difference_image = on_image / get_phase_duration(self.on_range) - off_image / get_phase_duration(self.off_range)
-            merged_image[self.image_shape[0]+1:2*self.image_shape[0]+1,:] = difference_image
+            stretched_difference = self.apply_stretch(difference_image, vmin, vmax)
+            merged_image[self.image_shape[0]+1:2*self.image_shape[0]+1,:, :] = stretched_difference
 
             if np.sum(on_image) == 0:
                 snr_metric = 0
@@ -493,60 +543,24 @@ class PhaseGUI(tk.Tk):
                 variance_of_background = np.var(difference_image[~self.roi_mask])
                 snr_metric = mean_roi_flux**2 / variance_of_background
 
-        # Scale the image to zero to one
-        vmin = np.min(merged_image)
-        vmax = np.max(merged_image)
-        if vmin == vmax: 
-            scaled_image = np.zeros(merged_image.shape, float)
-        else:
-            scaled_image = ((merged_image - vmin) / (vmax - vmin))
-
-        # Blur
-        blur_scale = get_tk_value(self.blur_var)
-        if blur_scale > 0:
-            line = np.arange(-np.ceil(blur_scale)*3, np.ceil(blur_scale)*3+1)
-            xs, ys = np.meshgrid(line,line)
-            gauss = np.exp(-(xs**2 + ys**2) / (2*blur_scale**2))
-            gauss /= np.sum(gauss)
-            scaled_image = convolve(scaled_image, gauss, mode="same")
-
         # Add the colorbar
-        for pixel, f in enumerate(np.linspace(0, 1, scaled_image.shape[1])):
-            scaled_image[2*self.image_shape[0]+1:2*self.image_shape[0]+1+11,pixel] = f
-            
-        # Stretch
-        scaled_image = np.exp(STRETCH_SEVERITY*(self.stretch[1]-0.5)) * (scaled_image - self.stretch[0]) + self.stretch[0]
+        colorbar = np.zeros((10, self.image_shape[1]))
+        for pixel, f in enumerate(np.linspace(vmin, vmax, self.image_shape[1])):
+            colorbar[:,pixel] = f
+        stretched_colorbar = self.apply_stretch(colorbar, vmin, vmax, is_colorbar=True)
+        merged_image[2*self.image_shape[0]+1:2*self.image_shape[0]+11,:, :] = stretched_colorbar
 
-        # Prepare for drawing
-        scaled_image[~np.isfinite(scaled_image)] = 0
-        scaled_image = np.clip(np.round(scaled_image*255), 0, 255).astype(np.uint8)
-        scaled_data_bgr = cv2.cvtColor(scaled_image, cv2.COLOR_GRAY2BGR)
-
-        # Draw ROI
-        if self.roi_center is not None:
-            width = get_tk_value(self.width_var)
-            cv2.rectangle(scaled_data_bgr,
-                (self.roi_center[0]-width//2, self.roi_center[1]-width//2),
-                (self.roi_center[0]+width//2, self.roi_center[1]+width//2),
-                (0, 255, 0), 1)
-            offset = self.image_shape[0] + 1
-            cv2.rectangle(scaled_data_bgr,
-                (self.roi_center[0]-width//2, self.roi_center[1]+offset-width//2),
-                (self.roi_center[0]+width//2, self.roi_center[1]+offset+width//2),
-                (0, 255, 0), 1)
-            
         # Draw dividing line
-        cv2.line(scaled_data_bgr, (0, self.image_shape[0]), (self.image_shape[1], self.image_shape[0]), (255,0,255))
-        cv2.line(scaled_data_bgr, (0, 2*self.image_shape[0]+1), (self.image_shape[1], 2*self.image_shape[0]+1), (255,0,255))
-        cv2.line(scaled_data_bgr, (0, 2*self.image_shape[0]+11), (self.image_shape[1], 2*self.image_shape[0]+11), (255,0,255))
+        cv2.line(merged_image, (0, self.image_shape[0]), (self.image_shape[1], self.image_shape[0]), (255,0,255))
+        cv2.line(merged_image, (0, 2*self.image_shape[0]+1), (self.image_shape[1], 2*self.image_shape[0]+1), (255,0,255))
+        cv2.line(merged_image, (0, 2*self.image_shape[0]+11), (self.image_shape[1], 2*self.image_shape[0]+11), (255,0,255))
 
         if self.on_range is None or self.off_range is None:
-            cv2.putText(scaled_data_bgr, "N/A", (self.image_shape[1]//2-18,3*self.image_shape[0]//2+5), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
+            cv2.putText(merged_image, "N/A", (self.image_shape[1]//2-18,3*self.image_shape[0]//2+5), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
         else:
-            cv2.putText(scaled_data_bgr, f"SNR: {snr_metric:.1f}", (self.image_shape[1]//2-40,5*self.image_shape[0]//2+11+10), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
+            cv2.putText(merged_image, f"SNR: {snr_metric:.1f}", (self.image_shape[1]//2-40,5*self.image_shape[0]//2+11+10), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
 
-
-        cv2.imshow("Image", scaled_data_bgr)
+        cv2.imshow("Image", merged_image)
         cv2.waitKey(1)
 
 
