@@ -1,11 +1,9 @@
 import numpy as np
-from matplotlib import pyplot as plt
 from scipy.signal import convolve
 import tkinter as tk
 from tkinter import Label, Entry, Button, Scale, LabelFrame, Checkbutton
 import threading
 from astropy.time import Time
-# import keyboard
 import cv2
 import queue
 
