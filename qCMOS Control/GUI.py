@@ -1376,6 +1376,7 @@ class CameraGUI(tk.Tk):
             self.camera_thread.join()  # Wait for the camera thread to finish
 
 if __name__ == "__main__":
+    print("\n\nJack deliberately broke this file so that he could test it without the camera. Don't record data with it! It won't work.\n\n")
 
     shared_data = SharedData()
     frame_queue = queue.Queue(maxsize=3)  # Limit the size of the frame queue

@@ -6,6 +6,9 @@ import threading
 from astropy.time import Time
 import cv2
 import queue
+import time
+from astropy.io import fits
+
 
 LC_WINDOW_SIZE = (550, 300)
 LC_LEFT_BOUND = 50 # left bound of the plot
@@ -606,6 +609,9 @@ class PhaseGUI(tk.Tk):
 
 class SavedDataThread(threading.Thread):
     def __init__(self, filename, frame_queue, timestamp_queue):
+        """
+        Feed data from a saved file into the GUI
+        """
         super().__init__()
         self.frame_queue = frame_queue
         self.timestamp_queue = timestamp_queue
@@ -621,8 +627,8 @@ class SavedDataThread(threading.Thread):
 
     def load_file(self):
         for (frame, timestamp) in zip(self.frames, self.timestamps):
-            # time.sleep(self.time_between_frames) # TODO
-            time.sleep(0.5)
+            # time.sleep(self.time_between_frames) # Use this line of code for a real run to deliver real-time data
+            time.sleep(0.5) # Use this line for debugging purposes, to make the data stream last longer.
             try:
                 self.frame_queue.put_nowait(frame)
                 self.timestamp_queue.put_nowait(timestamp)
@@ -634,16 +640,13 @@ class SavedDataThread(threading.Thread):
         print("File completed")
 
 if __name__ == "__main__":
-    import time
-    from astropy.io import fits
-
     # Create shared queues containing the data coming from the camera / saved data.
     # The matplotlib lightcurve is really slow, so it's important to have a fairly large queue that can save many frames as the GUI plots the lightcurve. The frames will be dumped into the image buffer later.
     QUEUE_MAXSIZE = 100
     frame_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
     timestamp_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
 
-    # Create the thread to feed the GUI data
+    # Create the thread to feed the GUI data from a FITS file
     test_thread = SavedDataThread("../../data/crab1000_20241026_101129049763441_cube066.fits", frame_queue, timestamp_queue)
     test_thread.start()
 
