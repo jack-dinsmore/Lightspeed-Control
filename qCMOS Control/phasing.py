@@ -22,7 +22,11 @@ def show_span(image, r, color):
     
     x_min = int(np.round(LC_LEFT_BOUND + plot_width*r[0]))
     x_max = int(np.round(LC_LEFT_BOUND + plot_width*r[1]))
-    cv2.rectangle(image, (x_min, 0), (x_max, LC_LOWER_BOUND), color, -1)
+    if x_min < x_max:
+        cv2.rectangle(image, (x_min, 0), (x_max, LC_LOWER_BOUND), color, -1)
+    else:
+        cv2.rectangle(image, (LC_LEFT_BOUND, 0), (x_max, LC_LOWER_BOUND), color, -1)
+        cv2.rectangle(image, (x_min, 0), (LC_WINDOW_SIZE[0], LC_LOWER_BOUND), color, -1)
 
 def get_tk_value(tk_value):
     try:
@@ -138,6 +142,7 @@ class PhaseGUI(tk.Tk):
 
         self.roi_center = None # Center of the ROI (pix)
         self.roi_width = None # Full width of the square ROI (pix)
+        self.roi_mask = None
         self.on_range = None # On phase range
         self.off_range = None # Off phase range
         self.temporary_range = None # Temporary range used by the UI when setting a new range
@@ -365,16 +370,18 @@ class PhaseGUI(tk.Tk):
             self.on_image.clear()
             self.off_image.clear()
 
+    def make_roi_mask(self):
+        xs, ys = np.meshgrid(np.arange(self.image_shape[1]), np.arange(self.image_shape[0]))
+        width = get_tk_value(self.width_var)
+        self.roi_mask = np.abs(xs - self.roi_center[0]) <= width//2
+        self.roi_mask &= np.abs(ys - self.roi_center[1]) <= width//2
+
     def process_lc(self, data, timestamp):
         if self.roi_center is None:
             return
         
         # Get flux within ROI
-        xs, ys = np.meshgrid(np.arange(data.shape[1]), np.arange(data.shape[0]))
-        width = get_tk_value(self.width_var)
-        pixel_mask = np.abs(xs - self.roi_center[0]) <= width//2
-        pixel_mask &= np.abs(ys - self.roi_center[1]) <= width//2
-        flux = np.sum(data[pixel_mask])
+        flux = np.sum(data[self.roi_mask])
 
         # Add to the LC
         phase = self.get_phase(timestamp)
@@ -474,17 +481,27 @@ class PhaseGUI(tk.Tk):
 
         # Add the difference image
         if self.on_range is not None and self.off_range is not None:
-            difference_image = self.on_image.get().astype(float) / get_phase_duration(self.on_range) - self.off_image.get().astype(float) / get_phase_duration(self.off_range)
+            on_image = self.on_image.get().astype(float)
+            off_image = self.off_image.get().astype(float)
+            difference_image = on_image / get_phase_duration(self.on_range) - off_image / get_phase_duration(self.off_range)
             merged_image[self.image_shape[0]+1:2*self.image_shape[0]+1,:] = difference_image
 
-        # Show the image
+            if np.sum(on_image) == 0:
+                snr_metric = 0
+            else:
+                mean_roi_flux = np.sum(difference_image[self.roi_mask]) / np.sum(self.roi_mask)
+                variance_of_background = np.var(difference_image[~self.roi_mask])
+                snr_metric = mean_roi_flux**2 / variance_of_background
+
+        # Scale the image to zero to one
         vmin = np.min(merged_image)
         vmax = np.max(merged_image)
         if vmin == vmax: 
-            scaled_image = np.zeros_like(merged_image)
+            scaled_image = np.zeros(merged_image.shape, float)
         else:
             scaled_image = ((merged_image - vmin) / (vmax - vmin))
-        scaled_image = np.exp(STRETCH_SEVERITY*(self.stretch[0]-0.5)) * (scaled_image - self.stretch[1]) + self.stretch[1]
+
+        # Blur
         blur_scale = get_tk_value(self.blur_var)
         if blur_scale > 0:
             line = np.arange(-np.ceil(blur_scale)*3, np.ceil(blur_scale)*3+1)
@@ -492,6 +509,15 @@ class PhaseGUI(tk.Tk):
             gauss = np.exp(-(xs**2 + ys**2) / (2*blur_scale**2))
             gauss /= np.sum(gauss)
             scaled_image = convolve(scaled_image, gauss, mode="same")
+
+        # Add the colorbar
+        for pixel, f in enumerate(np.linspace(0, 1, scaled_image.shape[1])):
+            scaled_image[2*self.image_shape[0]+1:2*self.image_shape[0]+1+11,pixel] = f
+            
+        # Stretch
+        scaled_image = np.exp(STRETCH_SEVERITY*(self.stretch[1]-0.5)) * (scaled_image - self.stretch[0]) + self.stretch[0]
+
+        # Prepare for drawing
         scaled_image[~np.isfinite(scaled_image)] = 0
         scaled_image = np.clip(np.round(scaled_image*255), 0, 255).astype(np.uint8)
         scaled_data_bgr = cv2.cvtColor(scaled_image, cv2.COLOR_GRAY2BGR)
@@ -511,9 +537,14 @@ class PhaseGUI(tk.Tk):
             
         # Draw dividing line
         cv2.line(scaled_data_bgr, (0, self.image_shape[0]), (self.image_shape[1], self.image_shape[0]), (255,0,255))
+        cv2.line(scaled_data_bgr, (0, 2*self.image_shape[0]+1), (self.image_shape[1], 2*self.image_shape[0]+1), (255,0,255))
+        cv2.line(scaled_data_bgr, (0, 2*self.image_shape[0]+11), (self.image_shape[1], 2*self.image_shape[0]+11), (255,0,255))
 
         if self.on_range is None or self.off_range is None:
             cv2.putText(scaled_data_bgr, "N/A", (self.image_shape[1]//2-18,3*self.image_shape[0]//2+5), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
+        else:
+            cv2.putText(scaled_data_bgr, f"SNR: {snr_metric:.1f}", (self.image_shape[1]//2-40,5*self.image_shape[0]//2+11+10), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
+
 
         cv2.imshow("Image", scaled_data_bgr)
         cv2.waitKey(1)
@@ -533,6 +564,7 @@ class PhaseGUI(tk.Tk):
             if get_tk_value(self.lock_roi_var) == 0:
                 # ROI is not locked
                 self.roi_center = (self.roi_moved[0], self.roi_moved[1])
+                self.make_roi_mask()
                 self.clear_lc()
                 if self.on_range is not None and self.off_range is not None:
                     # Clear the images only if they were on-off folded
