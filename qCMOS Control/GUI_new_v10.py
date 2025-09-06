@@ -1839,7 +1839,7 @@ class CameraGUI(tk.Tk):
                 if self.peripherals_thread.ax_b_3 is None:
                     return
                 option = self.halpha_qwp_var.get()
-                positions = {'Halpha': 138, 'QWP': 13, 'Neither': 75.5}
+                positions = {'Halpha': 151.5, 'QWP': 23.15, 'Neither': 87.18}
                 with self.peripherals_thread.peripherals_lock:
                     self.peripherals_thread.ax_b_3.move_absolute(
                         positions[option], Units.LENGTH_MILLIMETRES)
@@ -1855,7 +1855,7 @@ class CameraGUI(tk.Tk):
                 if self.peripherals_thread.ax_b_2 is None:
                     return
                 option = self.wire_grid_var.get()
-                positions = {'WeDoWo': 15.5, 'Wire Grid': 128.5, 'Neither': 72}
+                positions = {'WeDoWo': 17.78, 'Wire Grid': 128.5, 'Neither': 60.66}
                 with self.peripherals_thread.peripherals_lock:
                     self.peripherals_thread.ax_b_2.move_absolute(
                         positions[option], Units.LENGTH_MILLIMETRES)
