@@ -40,7 +40,7 @@ Also used PLAY to set to Dark Mode, which turns off LEDs on the SESTO SENSO 2 fo
 selected properties, and made sure this device connects to COM3. I then selected PLL ASCOM Rotator 2, selected properties, and linked this to COM4.
 9. Made ascom_rotators.py script in Documents of Windows VM that can be run to change the absolute positions of the rotators.
 To start virtual machine, open a command prompt. Type "virt-manager". Select the win10 machine, hit Open, and press the play button. PW is the same as
-for Lightspeed control PC.
+for Lightspeed control PC. Each time may need to repeat "redirect USB device"
 
 For CyberPower PDU41003 Control
 --------------------------------

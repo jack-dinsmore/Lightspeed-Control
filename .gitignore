@@ -1,0 +1,30 @@
+# Compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Virtualenvs
+.venv/
+env/
+lightspeed-env/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Logs & outputs
+*.log
+captures/
+*.fits
+
+# SDK/demo binaries
+PyZWOEFW-main/**/bin/
+PyZWOEFW-main/**/test_console
+*.so
+*.dylib
+
+__pycache__/
+*.py[cod]
+*.class
+captures/
+*.fits
