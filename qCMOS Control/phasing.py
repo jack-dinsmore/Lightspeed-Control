@@ -261,10 +261,10 @@ class PhaseGUI(tk.Tk):
         """
         raise NotImplementedError()
     
-        # self.t_start = 
-        # self.n_stacks = 
-        # self.delta_t = 
-        # self.image_shape = 
+        # self.t_start = # GPS time of the first frame of this data set
+        # self.n_stacks = # Number of stacked images per frame
+        # self.delta_t = # Time between each image
+        # self.image_shape = # Shape of each image
 
     def set_camera_data_from_file(self, saved_data_feed):
         """
@@ -278,7 +278,7 @@ class PhaseGUI(tk.Tk):
             frame_shape = hdul[1].data[0].shape
 
         self.t_start = mjd * 3600 * 24 # Time at which the camera started observing (seconds)
-        self.n_stacks = 100 # TODO Number of stacked images in a given frame
+        self.n_stacks = 100 # TODO Number of stacked images in a given frame. Eventually, this should be read from the header
         self.delta_t = delta_time_stamp / self.n_stacks # Time between stacked images
         self.image_shape = (frame_shape[0]//self.n_stacks, frame_shape[1])
 
@@ -641,14 +641,19 @@ class SavedDataThread(threading.Thread):
 
 if __name__ == "__main__":
     # Create shared queues containing the data coming from the camera / saved data.
-    # The matplotlib lightcurve is really slow, so it's important to have a fairly large queue that can save many frames as the GUI plots the lightcurve. The frames will be dumped into the image buffer later.
     QUEUE_MAXSIZE = 100
     frame_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
     timestamp_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
 
-    # Create the thread to feed the GUI data from a FITS file
+    # Create the thread to feed the GUI data from a FITS file.
     test_thread = SavedDataThread("../../data/crab1000_20241026_101129049763441_cube066.fits", frame_queue, timestamp_queue)
     test_thread.start()
+
+    # The GUI is also designed to run off the the CameraThread, which feeds realtime data. But to do
+    # this, the `PhaseGUI.set_camera_data_from_camera_thread` function will have to be implemented.
+    # It should read in some basic metadata about how the images in the frame_queue are formatted.
+    # test_thread = CameraThread(shared_data, frame_queue, timestamp_queue, app)
+    # test_thread.start()
 
     # Create the gui
     phase_gui = PhaseGUI(frame_queue, timestamp_queue, test_thread)
