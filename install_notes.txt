@@ -23,10 +23,40 @@ after importing os and defining file directory.
 11. Ran "sudo install efw.rules /lib/udev/rules.d" to be able to connect to filter wheel without needing root privileges
 12. Restarted computer
 
+For SESTO SENSO 2 connection
+--------------------------------
+1. Downloaded virt-manager, created Windows 10 VM
+2. Connected both SESTO SENSO 2 focusers to power, ARCO, and USB ports.
+3. Opened VM, clicked blue "Information" button. Ensured there were 3 USB redirectors. Created 2 serial connections, with device type "unix"
+and paths "/dev/ttyUSB0" and "/dev/ttyUSB1"
+4. Above blue "Information" button, clicked "Virtual Machine" -> "Redirect USB Device" and select both Silicon Labs CP2102N devices.
+Sometimes these get unchecked when the focusers get disconnected/unplugged.
+All of the following in Windows VM:
+5. Installed PLAY (Prima Luce AstrophotographY software), ASCOM 7.0, and SESTO SENSO 2 drivers.
+6. Checked in Device Manager that both Silicon Labs devices are showing up on COM ports
+7. For each focuser/ARCO: opened PLAY. Connected to COM port corresponding to focuser. Updated firmware. Calibrated SESTO SENSO 2. Calibrated ARCO.
+Also used PLAY to set to Dark Mode, which turns off LEDs on the SESTO SENSO 2 focusers (have to click arrow in bottom right corner to get to this option).
+8. Made python script with ASCOM. A commented out section of this script opened the ASCOM Chooser. Through this Chooser, I selected PLL ASCOM Rotator,
+selected properties, and made sure this device connects to COM3. I then selected PLL ASCOM Rotator 2, selected properties, and linked this to COM4.
+9. Made ascom_rotators.py script in Documents of Windows VM that can be run to change the absolute positions of the rotators.
+To start virtual machine, open a command prompt. Type "virt-manager". Select the win10 machine, hit Open, and press the play button. PW is the same as
+for Lightspeed control PC. Each time may need to repeat "redirect USB device"
+
+For CyberPower PDU41003 Control
+--------------------------------
+1. Downloaded Jack Haviland's PDU control code (GUI doesn't work, but rest does).
+2. Navigated to python-cyberpower-pdu. Ran "pip install -e ."
+
+For Lab Jack Shutter Control
+--------------------------------
+1. Downloaded LJM software for Linux: https://support.labjack.com/docs/ljm-software-installer-downloads-t4-t7-t8-digit
+2. Unzipped file, navigated to its folder and ran "sudo ./labjack_ljm_installer.run"
+
+For Zaber Stage Control
+--------------------------------
+1. Just ran "pip install zaber-motion"
+
 Some notes
 --------------------------------
-1. At present, the camera is recognized only via USB3. Still working on connecting via CoaXpress.
-2. Since a GPS card is not installed yet on the main control PC, I commented out "import GPS_time"
-from GUI.py and test.py, as it was raising an error for not being able to find libmbgdevio.so
 
 Last updated 06/18/2025 by Chris Layden
