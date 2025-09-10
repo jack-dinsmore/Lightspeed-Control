@@ -501,8 +501,8 @@ class CameraThread(threading.Thread):
             'OUTPUT_TRIG_ACTIVE_0': 1.0,
             'OUTPUT_TRIG_POLARITY_0': 1.0,
             'OUTPUT_TRIG_PERIOD_0': 10,
-            'SENSOR_MODE': 18.0,
-            'IMAGE_PIXEL_TYPE': 1.0
+            'SENSOR_MODE': 1.0,
+            'IMAGE_PIXEL_TYPE': 2.0
         }
         for prop, value in defaults.items():
             self.set_property(prop, value)
@@ -1235,7 +1235,7 @@ class CameraGUI(tk.Tk):
         self.binning_menu.grid(row=0, column=1)
 
         Label(camera_settings_frame, text="Bit Depth:").grid(row=1, column=0)
-        self.bit_depth_var = StringVar(value="8-bit")
+        self.bit_depth_var = StringVar(value="16-bit")
         self.bit_depth_menu = OptionMenu(camera_settings_frame, self.bit_depth_var, 
                                          "8-bit", "16-bit", command=self.change_bit_depth)
         self.bit_depth_menu.grid(row=1, column=1)
@@ -1248,7 +1248,7 @@ class CameraGUI(tk.Tk):
         self.readout_speed_menu.grid(row=2, column=1)
 
         Label(camera_settings_frame, text="Sensor Mode:").grid(row=3, column=0)
-        self.sensor_mode_var = StringVar(value="Photon Number Resolving")
+        self.sensor_mode_var = StringVar(value="Standard")
         self.sensor_mode_menu = OptionMenu(camera_settings_frame, self.sensor_mode_var, 
                                            "Photon Number Resolving", "Standard", 
                                            command=self.change_sensor_mode)
@@ -1777,34 +1777,19 @@ class CameraGUI(tk.Tk):
         """Take flat field images cycling through filters"""
         def _cycle_filters():
             try:
-                filter_sequence = [1, 2, 6, 3, 4, 5]  # u', g', 500nm, r', i', z'
-                filter_names = {1: "u'", 2: "g'", 3: "r'", 4: "i'", 5: "z'", 6: "500nm"}
-                
+                filter_sequence = [6, 1, 2, 3, 4, 5]
                 for filter_pos in filter_sequence:
-                    if self.peripherals_thread.efw is None:
-                        logging.error("Filter wheel not connected")
-                        self.update_status("Filter wheel not connected", "red")
-                        return
-                    
-                    # Set filter position
-                    with self.peripherals_thread.peripherals_lock:
-                        self.peripherals_thread.efw.SetPosition(0, filter_pos)
-                        logging.info(f"Setting filter to position {filter_pos} ({filter_names.get(filter_pos, 'Unknown')})")
-                        
-                    # Update GUI to show current filter
-                    filter_text = f"{filter_pos} ({filter_names.get(filter_pos, '')})"
-                    for key, value in self.filter_options.items():
-                        if value == filter_pos:
-                            self.after(0, lambda k=key: self.filter_position_var.set(k))
-                            break
-                    
-                    # Wait for filter wheel to settle
-                    time.sleep(2.0)
-                    
+                    # Get the key associated with each filter position
+                    filter_name = next((k for k, v in self.filter_options.items() if v == filter_pos), None)
+                    self.filter_position_var.set(filter_name)
+                    logging.info(f"Setting filter to position {filter_pos} ({filter_name})")
+                    self.peripherals_thread.efw.SetPosition(0, filter_pos)
+                    # Getting position will wait until move is complete
+                    self.peripherals_thread.efw.GetPosition(0)
+
                     # Update status
-                    self.after(0, lambda fn=filter_names.get(filter_pos): 
-                              self.update_status(f"Taking flat with filter {fn}", "blue"))
-                    
+                    self.after(0, self.update_status(f"Taking flat with filter {filter_name}", "blue"))
+
                     # Add a small delay between filters for stability
                     time.sleep(1.0)
                 
