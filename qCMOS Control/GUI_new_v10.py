@@ -645,11 +645,12 @@ class CameraThread(threading.Thread):
 class OptimizedSaveThread(threading.Thread):
     """Optimized save thread using process pool for FITS writing"""
     
-    def __init__(self, save_queue, camera_thread, object_name, shared_data):
+    def __init__(self, save_queue, camera_thread, header_dict, object_name, shared_data):
         super().__init__(name="SaveThread")
         self.save_queue = save_queue
         self.running = True
         self.camera_thread = camera_thread
+        self.header_dict = header_dict
         self.object_name = object_name
         self.batch_size = 100
         self.frame_buffer = []
@@ -730,7 +731,7 @@ class OptimizedSaveThread(threading.Thread):
             # Submit to thread pool - numpy array stacking happens in thread
             future = self.executor.submit(
                 self.write_fits_in_thread,
-                filepath, frames_to_write, timestamps, framestamps,
+                filepath, frames_to_write, timestamps, framestamps, self.header_dict,
                 self.object_name, self.cube_index, camera_params
             )
             
@@ -745,7 +746,7 @@ class OptimizedSaveThread(threading.Thread):
             logging.error(f"Write cube error: {e}")
 
     def write_fits_in_thread(self, filepath, frames, timestamps, framestamps, 
-                             object_name, cube_index, camera_params):
+                             header_dict, object_name, cube_index, camera_params):
         """Write FITS file in thread - numpy array creation happens here"""
         try:
             # Set thread to low priority
@@ -768,6 +769,15 @@ class OptimizedSaveThread(threading.Thread):
             
             # Add camera parameters
             for key, value in camera_params.items():
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore")
+                    try:
+                        image_hdu.header[key] = value
+                    except:
+                        pass
+
+            # Add other header parameters
+            for key, value in header_dict.items():
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore")
                     try:
@@ -1088,7 +1098,7 @@ class CameraGUI(tk.Tk):
         self.last_display_time = time.time()
 
         self.min_val = tk.StringVar(value="0")
-        self.max_val = tk.StringVar(value="200")
+        self.max_val = tk.StringVar(value="60000")
 
         self.title("Lightspeed Prototype Control GUI")
         self.geometry("1000x1080")
@@ -1375,31 +1385,31 @@ class CameraGUI(tk.Tk):
         self.wire_grid_menu.grid(row=2, column=1)
 
         # Make zoom control identical to focus control, just moving the other stepper
-        Label(self.peripherals_controls_frame, text="Zoom Position (deg):").grid(row=2, column=2)
+        Label(self.peripherals_controls_frame, text="Zoom Position (deg):").grid(row=3, column=0, columnspan=2)
         self.zoom_position_var = tk.StringVar(value='0')
         self.zoom_conversion_factor = 1
         self.zoom_position_entry = Entry(self.peripherals_controls_frame, 
                                         textvariable=self.zoom_position_var)
-        self.zoom_position_entry.grid(row=2, column=3)
+        self.zoom_position_entry.grid(row=3, column=2)
         self.set_zoom_button = Button(self.peripherals_controls_frame, text="Set Zoom",
                                      command=self.update_zoom_position)
-        self.set_zoom_button.grid(row=2, column=4)
+        self.set_zoom_button.grid(row=3, column=3)
 
         # Focus control
-        Label(self.peripherals_controls_frame, text="Focus Position (deg):").grid(row=3, column=0, columnspan=2)
+        Label(self.peripherals_controls_frame, text="Focus Position (deg):").grid(row=4, column=0, columnspan=2)
         self.focus_position_var = tk.StringVar(value='0')
         self.focus_conversion_factor = 1
         self.focus_position_entry = Entry(self.peripherals_controls_frame, 
                                           textvariable=self.focus_position_var)
-        self.focus_position_entry.grid(row=3, column=2)
+        self.focus_position_entry.grid(row=4, column=2)
         self.set_focus_button = Button(self.peripherals_controls_frame, text="Set Focus",
                                        command=self.update_focus_position)
-        self.set_focus_button.grid(row=3, column=3)
+        self.set_focus_button.grid(row=4, column=3)
 
     def setup_pdu_controls(self):
         """Set up PDU outlet control widgets - exactly as original"""
-        Label(self.peripherals_controls_frame, text="PDU Outlet States").grid(row=4, column=0, columnspan=4)
-        
+        Label(self.peripherals_controls_frame, text="PDU Outlet States").grid(row=5, column=0, columnspan=4)
+
         self.pdu_outlet_dict = {
             1: 'Rotator', 2: 'Switch', 3: 'Shutter', 4: 'Empty',
             5: 'Empty', 6: 'Empty', 7: 'Empty', 8: 'Empty',
@@ -1565,10 +1575,10 @@ class CameraGUI(tk.Tk):
     def update_batch_size(self, *_):
         """Update batch size for saving"""
         try:
-            self.batch_size = int(self.cube_size_entry.get())
-            debug_logger.info(f"Batch size: {self.batch_size}")
+            self.cube_size_var = int(self.cube_size_entry.get())
+            debug_logger.info(f"Batch size: {self.cube_size_var}")
         except:
-            self.batch_size = 100
+            self.cube_size_var = 100
 
     def change_binning(self, selected_binning):
         """Change camera binning"""
@@ -1676,9 +1686,10 @@ class CameraGUI(tk.Tk):
                 save_queue = queue.Queue(maxsize=50000)
                 self.camera_thread.save_queue = save_queue
                 object_name = self.object_name_entry.get() or "capture"
+                header_dict = self.get_header_info()
                 self.save_thread = OptimizedSaveThread(save_queue, self.camera_thread, 
-                                                       object_name, self.shared_data)
-                self.save_thread.batch_size = self.batch_size
+                                                       header_dict, object_name, self.shared_data)
+                self.save_thread.batch_size = self.cube_size_var.get()
                 self.save_thread.start()
             else:
                 self.camera_thread.save_queue = None
@@ -1777,30 +1788,119 @@ class CameraGUI(tk.Tk):
         """Take flat field images cycling through filters"""
         def _cycle_filters():
             try:
-                filter_sequence = [6, 1, 2, 3, 4, 5]
-                for filter_pos in filter_sequence:
-                    # Get the key associated with each filter position
+                # Store original settings
+                original_exposure = self.exposure_time_var.get()
+                original_save_state = self.save_data_var.get()
+                original_object_name = self.object_name_entry.get()
+                
+                TARGET_MEAN = 40000
+                BIAS_LEVEL = 200
+                
+                for filter_pos in [6, 1, 2, 3, 4, 5]:
+                    # Set filter
                     filter_name = next((k for k, v in self.filter_options.items() if v == filter_pos), None)
                     self.filter_position_var.set(filter_name)
-                    logging.info(f"Setting filter to position {filter_pos} ({filter_name})")
+                    logging.info(f"Taking flats for filter {filter_name}")
                     self.peripherals_thread.efw.SetPosition(0, filter_pos)
-                    # Getting position will wait until move is complete
                     self.peripherals_thread.efw.GetPosition(0)
-
-                    # Update status
-                    self.after(0, self.update_status(f"Taking flat with filter {filter_name}", "blue"))
-
-                    # Add a small delay between filters for stability
+                    time.sleep(0.5)
+                    
+                    # Find appropriate test exposure
+                    test_exposure = 0.1  # Start at 100ms
+                    test_mean = 70000  # Start above threshold to enter loop
+                    
+                    while test_mean > 60000:
+                        self.camera_thread.set_property('EXPOSURE_TIME', test_exposure)
+                        while not self.frame_queue.empty():
+                            self.frame_queue.get_nowait()
+                        
+                        self.camera_thread.start_capture()
+                        test_frame = self.frame_queue.get(timeout=2.0)
+                        self.camera_thread.stop_capture()
+                        
+                        # Calculate mean of central 100x100 region
+                        h, w = test_frame.shape
+                        cy, cx = h // 2, w // 2
+                        central_region = test_frame[cy-50:cy+50, cx-50:cx+50]
+                        test_mean = np.mean(central_region)
+                        
+                        if test_mean > 60000:
+                            test_exposure *= 0.1  # Reduce by factor of 10
+                            print(f"{filter_name}: Saturated (mean={test_mean:.0f}), trying {test_exposure*1000:.1f}ms")
+                    
+                    # Calculate scaled exposure
+                    scaled_exposure = test_exposure * (TARGET_MEAN - BIAS_LEVEL) / (test_mean - BIAS_LEVEL)
+                    scaled_exposure = max(0.001, min(30, scaled_exposure))  # Limit 1ms-30s
+                    
+                    print(f"{filter_name}: test={test_mean:.0f} @ {test_exposure*1000:.1f}ms, scaled={scaled_exposure*1000:.0f}ms")
+                    
+                    # Take 5 frames at scaled exposure
+                    self.save_data_var.set(True)
+                    filter_short = filter_name.split()[0].replace('(', '').replace(')', '')
+                    self.object_name_entry.delete(0, tk.END)
+                    self.object_name_entry.insert(0, f"flat_{filter_short}_{int(scaled_exposure*1000)}ms")
+                    
+                    self.camera_thread.set_property('EXPOSURE_TIME', scaled_exposure)
+                    
+                    # Clear queues before starting
+                    while not self.frame_queue.empty():
+                        self.frame_queue.get_nowait()
+                    
+                    # Start capture WITHOUT save thread first
+                    self.camera_thread.save_queue = None
+                    self.camera_thread.start_capture()
+                    
+                    # Collect exactly 5 frames
+                    frames_to_save = []
+                    timestamps_to_save = []
+                    framestamps_to_save = []
+                    for i in range(5):
+                        frame = self.frame_queue.get(timeout=scaled_exposure + 1)
+                        # Also get timestamp data
+                        try:
+                            ts, fs = self.timestamp_queue.get_nowait()
+                            timestamps_to_save.append(ts)
+                            framestamps_to_save.append(fs)
+                        except:
+                            timestamps_to_save.append(0)
+                            framestamps_to_save.append(0)
+                        frames_to_save.append(frame)
+                    
+                    self.camera_thread.stop_capture()
+                    
+                    # Now save the collected frames directly
+                    save_queue = queue.Queue(maxsize=50000)
+                    for i, frame in enumerate(frames_to_save):
+                        save_queue.put((frame, timestamps_to_save[i], framestamps_to_save[i]))
+                    
+                    save_thread = OptimizedSaveThread(save_queue, self.camera_thread, self.get_header_info(),
+                                                      self.object_name_entry.get(), self.shared_data)
+                    save_thread.batch_size = 5
+                    save_thread.start()
+                    
+                    # Wait briefly for save to complete
+                    time.sleep(2.0)
+                    save_thread.stop()
+                    save_thread.join(timeout=5)
+                    
                     time.sleep(1.0)
                 
+                # Restore original settings
+                self.camera_thread.set_property('EXPOSURE_TIME', original_exposure / 1000.0)
+                self.save_data_var.set(original_save_state)
+                self.object_name_entry.delete(0, tk.END)
+                self.object_name_entry.insert(0, original_object_name)
+                
                 self.after(0, lambda: self.update_status("Flat sequence complete", "green"))
-                logging.info("Flat field sequence completed")
                 
             except Exception as e:
                 logging.error(f"Take flats error: {e}")
-                self.after(0, lambda: self.update_status(f"Error taking flats: {e}", "red"))
+                self.after(0, lambda: self.update_status(f"Error: {e}", "red"))
         
-        # Run in thread to avoid blocking GUI
+        if self.camera_thread.capturing:
+            self.update_status("Cannot take flats while capturing", "orange")
+            return
+        
         threading.Thread(target=_cycle_filters, daemon=True).start()
 
     # Peripheral control methods - all unchanged
@@ -1954,6 +2054,17 @@ class CameraGUI(tk.Tk):
                 btn.config(text='OFF', fg='red', relief='raised')
         except Exception as e:
             debug_logger.error(f"Toggle outlet error: {e}")
+
+    def get_header_info(self):
+        """Get header info for FITS files"""
+        header_info = {}
+        # Want to include filter position, shutter status, slit stage status, halpha stage status, wedowostage status
+        header_info['FILTER'] = self.filter_position_var.get()
+        header_info['SHUTTER'] = self.shutter_var.get()
+        header_info['SLIT'] = self.slit_position_var.get()
+        header_info['HALPHA'] = self.halpha_qwp_var.get()
+        header_info['POLSTAGE'] = self.wire_grid_var.get()
+        return header_info
 
     def on_close(self):
         """Handle application close"""
