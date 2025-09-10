@@ -1677,16 +1677,13 @@ class CameraGUI(tk.Tk):
             except:
                 min_val, max_val = 0, 200
 
-            # Scale data for display
-            if max_val > min_val:
+            if max_val < min_val:
+                min_val = 0
                 if data.dtype == np.uint16:
-                    scale = 65535.0 / (max_val - min_val)
-                    scaled_data = np.clip((data.astype(np.float32) - min_val) * scale, 0, 65535).astype(np.uint16)
+                    max_val = 65535
                 else:
-                    scaled_data = np.clip((data.astype(np.float32) - min_val) / (max_val - min_val) * 255, 
-                                        0, 255).astype(np.uint8)
-            else:
-                scaled_data = data
+                    max_val = 255
+            scaled_data = np.clip((data.astype(np.float32) - min_val) / (max_val - min_val) * 255, 0, 255).astype(np.uint8)
 
             # Flip horizontally
             scaled_data = cv2.flip(scaled_data, 1)
