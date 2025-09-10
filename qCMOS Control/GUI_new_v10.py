@@ -892,6 +892,16 @@ class PeripheralsThread(threading.Thread):
         # PDU needs async
         await self.connect_pdu()
 
+############### TO BE TESTED ###############################
+        # Update GUI with current positions after all devices connected
+        self.after_connection_update()
+
+    def after_connection_update(self):
+        """Update GUI after connections are established"""
+        # Give devices a moment to settle, then update GUI
+        threading.Timer(2.0, self.update_gui_with_current_positions).start()
+#############################################################
+
     async def connect_pdu(self):
         """Connect to PDU"""
         logging.info("Connecting to PDU")
@@ -1019,6 +1029,90 @@ class PeripheralsThread(threading.Thread):
         except Exception as e:
             debug_logger.error(f"Halpha/QWP stage init error: {e}")
             self.ax_b_3 = None
+
+############### TO BE TESTED L1023-L1105 ###############################
+    def get_current_filter_position(self):
+            """Get current filter wheel position"""
+            try:
+                with self.peripherals_lock:
+                    if self.efw:
+                        position = self.efw.GetPosition(0)
+                        # Reverse lookup from position to option string
+                        position_map = {0: '0 (Open)', 1: '1 (u\')', 2: '2 (g\')', 
+                                    3: '3 (r\')', 4: '4 (i\')', 5: '5 (z\')', 6: '6 (500nm)'}
+                        return position_map.get(position, '0 (Open)')
+            except Exception as e:
+                debug_logger.error(f"Get filter position error: {e}")
+            return '0 (Open)'
+
+    def get_current_shutter_state(self):
+        """Get current shutter state"""
+        try:
+            with self.peripherals_lock:
+                if self.ljm_handle:
+                    state = ljm.eReadName(self.ljm_handle, "DIO4")
+                    return 'Closed' if state else 'Open'
+        except Exception as e:
+            debug_logger.error(f"Get shutter state error: {e}")
+        return 'Open'
+
+    def get_current_slit_position(self):
+        """Get current slit position"""
+        try:
+            with self.peripherals_lock:
+                if self.ax_a_1:
+                    position = self.ax_a_1.get_position(Units.LENGTH_MILLIMETRES)
+                    # If position is closer to 0, it's "In beam", otherwise "Out of beam"
+                    return 'In beam' if abs(position) < 35 else 'Out of beam'
+        except Exception as e:
+            debug_logger.error(f"Get slit position error: {e}")
+        return 'Out of beam'
+
+    def get_current_halpha_qwp_position(self):
+        """Get current Halpha/QWP position"""
+        try:
+            with self.peripherals_lock:
+                if self.ax_b_3:
+                    position = self.ax_b_3.get_position(Units.LENGTH_MILLIMETRES)
+                    # Find closest position
+                    positions = {'Halpha': 151.5, 'QWP': 23.15, 'Neither': 87.18}
+                    closest = min(positions.items(), key=lambda x: abs(x[1] - position))
+                    return closest[0]
+        except Exception as e:
+            debug_logger.error(f"Get Halpha/QWP position error: {e}")
+        return 'Neither'
+
+    def get_current_pol_stage_position(self):
+        """Get current polarization stage position"""
+        try:
+            with self.peripherals_lock:
+                if self.ax_b_2:
+                    position = self.ax_b_2.get_position(Units.LENGTH_MILLIMETRES)
+                    # Find closest position
+                    positions = {'WeDoWo': 17.78, 'Wire Grid': 128.5, 'Neither': 60.66}
+                    closest = min(positions.items(), key=lambda x: abs(x[1] - position))
+                    return closest[0]
+        except Exception as e:
+            debug_logger.error(f"Get pol stage position error: {e}")
+        return 'Neither'
+
+    def update_gui_with_current_positions(self):
+        """Update GUI with current hardware positions"""
+        if self.gui_ref:
+            # Get current positions
+            filter_pos = self.get_current_filter_position()
+            shutter_state = self.get_current_shutter_state()
+            slit_pos = self.get_current_slit_position()
+            halpha_qwp_pos = self.get_current_halpha_qwp_position()
+            pol_stage_pos = self.get_current_pol_stage_position()
+            
+            # Update GUI in main thread
+            self.gui_ref.after(0, lambda: self.gui_ref.set_filter_position_display(filter_pos))
+            self.gui_ref.after(0, lambda: self.gui_ref.set_shutter_display(shutter_state))
+            self.gui_ref.after(0, lambda: self.gui_ref.set_slit_position_display(slit_pos))
+            self.gui_ref.after(0, lambda: self.gui_ref.set_halpha_qwp_display(halpha_qwp_pos))
+            self.gui_ref.after(0, lambda: self.gui_ref.set_pol_stage_display(pol_stage_pos))
+######################################################
 
     def disconnect_peripherals(self):
         """Disconnect all peripherals"""
@@ -1340,7 +1434,7 @@ class CameraGUI(tk.Tk):
 
         # Filter control
         Label(self.peripherals_controls_frame, text="Filter:").grid(row=0, column=0)
-        self.filter_position_var = tk.StringVar()
+        self.filter_position_var = tk.StringVar(value="Reading...")  #TO BE TESTED
         self.filter_options = {'0 (Open)': 0, '1 (u\')': 1, '2 (g\')': 2, '3 (r\')': 3,
                                '4 (i\')': 4, '5 (z\')': 5, '6 (500nm)': 6}
         self.filter_position_menu = OptionMenu(self.peripherals_controls_frame, self.filter_position_var,
@@ -1350,7 +1444,7 @@ class CameraGUI(tk.Tk):
 
         # Shutter control
         Label(self.peripherals_controls_frame, text="Shutter:").grid(row=0, column=2)
-        self.shutter_var = tk.StringVar(value='Open')
+        self.shutter_var = tk.StringVar(value="Reading...")  #TO BE TESTED
         self.shutter_menu = OptionMenu(self.peripherals_controls_frame, self.shutter_var,
                                        'Open', 'Closed', command=self.update_shutter)
         self.shutter_menu.grid(row=0, column=3)
@@ -1365,21 +1459,21 @@ class CameraGUI(tk.Tk):
         """Set up motor control widgets - exactly as original"""
         # Slit control
         Label(self.peripherals_controls_frame, text="Slit:").grid(row=1, column=0)
-        self.slit_position_var = tk.StringVar(value='Out of beam')
+        self.slit_position_var = tk.StringVar(value="Reading...")  #TO BE TESTED
         self.slit_position_menu = OptionMenu(self.peripherals_controls_frame, self.slit_position_var,
                                              'In beam', 'Out of beam', command=self.update_slit_position)
         self.slit_position_menu.grid(row=1, column=1)
 
         # Halpha/QWP control
         Label(self.peripherals_controls_frame, text="Halpha/QWP:").grid(row=1, column=2)
-        self.halpha_qwp_var = tk.StringVar(value='Neither')
+        self.halpha_qwp_var = tk.StringVar(value="Reading...")  #TO BE TESTED
         self.halpha_qwp_menu = OptionMenu(self.peripherals_controls_frame, self.halpha_qwp_var,
                                           'Halpha', 'QWP', 'Neither', command=self.update_halpha_qwp)
         self.halpha_qwp_menu.grid(row=1, column=3)
 
         # Polarization stage control
         Label(self.peripherals_controls_frame, text="Pol. Stage:").grid(row=2, column=0)
-        self.wire_grid_var = tk.StringVar(value='Neither')
+        self.wire_grid_var = tk.StringVar(value="Reading...")  #TO BE TESTED
         self.wire_grid_menu = OptionMenu(self.peripherals_controls_frame, self.wire_grid_var,
                                          'WeDoWo', 'Wire Grid', 'Neither', command=self.update_pol_stage)
         self.wire_grid_menu.grid(row=2, column=1)
@@ -1433,6 +1527,28 @@ class CameraGUI(tk.Tk):
                                  command=lambda i=idx: self.toggle_outlet(i))
             btn.grid(row=row, column=col + 1, padx=2, pady=2)
             self.pdu_outlet_buttons[idx] = btn
+
+############### TO BE TESTED ###############################
+    def set_filter_position_display(self, position_string):
+        """Set filter position display without triggering callback"""
+        self.filter_position_var.set(position_string)
+
+    def set_shutter_display(self, state_string):
+        """Set shutter display without triggering callback"""
+        self.shutter_var.set(state_string)
+
+    def set_slit_position_display(self, position_string):
+        """Set slit position display without triggering callback"""
+        self.slit_position_var.set(position_string)
+
+    def set_halpha_qwp_display(self, position_string):
+        """Set Halpha/QWP display without triggering callback"""
+        self.halpha_qwp_var.set(position_string)
+
+    def set_pol_stage_display(self, position_string):
+        """Set polarization stage display without triggering callback"""
+        self.wire_grid_var.set(position_string)
+##############################################
 
     def update_status(self, message, color="blue"):
         """Update status message"""
