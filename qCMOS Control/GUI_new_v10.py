@@ -892,7 +892,6 @@ class PeripheralsThread(threading.Thread):
         # PDU needs async
         await self.connect_pdu()
 
-############### TO BE TESTED ###############################
         # Update GUI with current positions after all devices connected
         self.after_connection_update()
 
@@ -900,7 +899,6 @@ class PeripheralsThread(threading.Thread):
         """Update GUI after connections are established"""
         # Give devices a moment to settle, then update GUI
         threading.Timer(2.0, self.update_gui_with_current_positions).start()
-#############################################################
 
     async def connect_pdu(self):
         """Connect to PDU"""
@@ -1030,7 +1028,6 @@ class PeripheralsThread(threading.Thread):
             debug_logger.error(f"Halpha/QWP stage init error: {e}")
             self.ax_b_3 = None
 
-############### TO BE TESTED L1023-L1105 ###############################
     def get_current_filter_position(self):
             """Get current filter wheel position"""
             try:
@@ -1112,7 +1109,7 @@ class PeripheralsThread(threading.Thread):
             self.gui_ref.after(0, lambda: self.gui_ref.set_slit_position_display(slit_pos))
             self.gui_ref.after(0, lambda: self.gui_ref.set_halpha_qwp_display(halpha_qwp_pos))
             self.gui_ref.after(0, lambda: self.gui_ref.set_pol_stage_display(pol_stage_pos))
-######################################################
+
 
     def disconnect_peripherals(self):
         """Disconnect all peripherals"""
@@ -1434,7 +1431,7 @@ class CameraGUI(tk.Tk):
 
         # Filter control
         Label(self.peripherals_controls_frame, text="Filter:").grid(row=0, column=0)
-        self.filter_position_var = tk.StringVar(value="Reading...")  #TO BE TESTED
+        self.filter_position_var = tk.StringVar(value="Reading...")  
         self.filter_options = {'0 (Open)': 0, '1 (u\')': 1, '2 (g\')': 2, '3 (r\')': 3,
                                '4 (i\')': 4, '5 (z\')': 5, '6 (500nm)': 6}
         self.filter_position_menu = OptionMenu(self.peripherals_controls_frame, self.filter_position_var,
@@ -1444,7 +1441,7 @@ class CameraGUI(tk.Tk):
 
         # Shutter control
         Label(self.peripherals_controls_frame, text="Shutter:").grid(row=0, column=2)
-        self.shutter_var = tk.StringVar(value="Reading...")  #TO BE TESTED
+        self.shutter_var = tk.StringVar(value="Reading...")  
         self.shutter_menu = OptionMenu(self.peripherals_controls_frame, self.shutter_var,
                                        'Open', 'Closed', command=self.update_shutter)
         self.shutter_menu.grid(row=0, column=3)
@@ -1459,46 +1456,52 @@ class CameraGUI(tk.Tk):
         """Set up motor control widgets - exactly as original"""
         # Slit control
         Label(self.peripherals_controls_frame, text="Slit:").grid(row=1, column=0)
-        self.slit_position_var = tk.StringVar(value="Reading...")  #TO BE TESTED
+        self.slit_position_var = tk.StringVar(value="Reading...")  
         self.slit_position_menu = OptionMenu(self.peripherals_controls_frame, self.slit_position_var,
                                              'In beam', 'Out of beam', command=self.update_slit_position)
         self.slit_position_menu.grid(row=1, column=1)
 
         # Halpha/QWP control
         Label(self.peripherals_controls_frame, text="Halpha/QWP:").grid(row=1, column=2)
-        self.halpha_qwp_var = tk.StringVar(value="Reading...")  #TO BE TESTED
+        self.halpha_qwp_var = tk.StringVar(value="Reading...")  
         self.halpha_qwp_menu = OptionMenu(self.peripherals_controls_frame, self.halpha_qwp_var,
                                           'Halpha', 'QWP', 'Neither', command=self.update_halpha_qwp)
         self.halpha_qwp_menu.grid(row=1, column=3)
 
         # Polarization stage control
         Label(self.peripherals_controls_frame, text="Pol. Stage:").grid(row=2, column=0)
-        self.wire_grid_var = tk.StringVar(value="Reading...")  #TO BE TESTED
+        self.wire_grid_var = tk.StringVar(value="Reading...")  
         self.wire_grid_menu = OptionMenu(self.peripherals_controls_frame, self.wire_grid_var,
                                          'WeDoWo', 'Wire Grid', 'Neither', command=self.update_pol_stage)
         self.wire_grid_menu.grid(row=2, column=1)
 
-        # Make zoom control identical to focus control, just moving the other stepper
-        Label(self.peripherals_controls_frame, text="Zoom Position (deg):").grid(row=3, column=0, columnspan=2)
+######### TBT #######
+        # Zoom control - separate row
+        Label(self.peripherals_controls_frame, text="Relative Zoom (deg):").grid(row=3, column=0)
         self.zoom_position_var = tk.StringVar(value='0')
         self.zoom_conversion_factor = 1
         self.zoom_position_entry = Entry(self.peripherals_controls_frame, 
-                                        textvariable=self.zoom_position_var)
-        self.zoom_position_entry.grid(row=3, column=2)
-        self.set_zoom_button = Button(self.peripherals_controls_frame, text="Set Zoom",
+                                        textvariable=self.zoom_position_var, width=8)
+        self.zoom_position_entry.grid(row=3, column=1)
+        self.set_zoom_button = Button(self.peripherals_controls_frame, text="Move Zoom",
                                      command=self.update_zoom_position)
-        self.set_zoom_button.grid(row=3, column=3)
+        self.set_zoom_button.grid(row=3, column=2)
+        Label(self.peripherals_controls_frame, text="(+: zoom in, -: zoom out)", 
+              font=("Arial", 8), fg="gray").grid(row=3, column=3, sticky='w')
 
-        # Focus control
-        Label(self.peripherals_controls_frame, text="Focus Position (deg):").grid(row=4, column=0, columnspan=2)
+        # Focus control - separate row
+        Label(self.peripherals_controls_frame, text="Relative Focus (deg):").grid(row=4, column=0)
         self.focus_position_var = tk.StringVar(value='0')
         self.focus_conversion_factor = 1
         self.focus_position_entry = Entry(self.peripherals_controls_frame, 
-                                          textvariable=self.focus_position_var)
-        self.focus_position_entry.grid(row=4, column=2)
-        self.set_focus_button = Button(self.peripherals_controls_frame, text="Set Focus",
+                                          textvariable=self.focus_position_var, width=8)
+        self.focus_position_entry.grid(row=4, column=1)
+        self.set_focus_button = Button(self.peripherals_controls_frame, text="Move Focus",
                                        command=self.update_focus_position)
-        self.set_focus_button.grid(row=4, column=3)
+        self.set_focus_button.grid(row=4, column=2)
+        Label(self.peripherals_controls_frame, text="(+: focus far, -: focus near)", 
+              font=("Arial", 8), fg="gray").grid(row=4, column=3, sticky='w')
+######### TBT #######
 
     def setup_pdu_controls(self):
         """Set up PDU outlet control widgets - exactly as original"""
@@ -1515,7 +1518,7 @@ class CameraGUI(tk.Tk):
         self.pdu_outlet_buttons = {}
         
         for idx, name in self.pdu_outlet_dict.items():
-            row = (idx - 1) % 8 + 8
+            row = (idx - 1) % 8 + 10 #TBT
             col = (idx - 1) // 8 * 2
             name_label = f"{idx}: {name}"
             tk.Label(self.peripherals_controls_frame, text=name_label, width=12, anchor='w')\
@@ -1528,7 +1531,6 @@ class CameraGUI(tk.Tk):
             btn.grid(row=row, column=col + 1, padx=2, pady=2)
             self.pdu_outlet_buttons[idx] = btn
 
-############### TO BE TESTED ###############################
     def set_filter_position_display(self, position_string):
         """Set filter position display without triggering callback"""
         self.filter_position_var.set(position_string)
@@ -1548,7 +1550,6 @@ class CameraGUI(tk.Tk):
     def set_pol_stage_display(self, position_string):
         """Set polarization stage display without triggering callback"""
         self.wire_grid_var.set(position_string)
-##############################################
 
     def update_status(self, message, color="blue"):
         """Update status message"""
@@ -2119,20 +2120,70 @@ class CameraGUI(tk.Tk):
         
         self.peripherals_thread.executor.submit(_update)
 
+###### TBT ####
     def update_zoom_position(self, *_):
-        """Update zoom position"""
+        """Update zoom position (relative movement)"""
         def _update():
             try:
                 if self.peripherals_thread.ax_a_2 is None:
+                    self.update_status("Zoom motor not connected", "red")
                     return
-                position = float(self.zoom_position_var.get())
+                    
+                relative_position = float(self.zoom_position_var.get())
+                if abs(relative_position) < 0.1:  # Minimum movement threshold
+                    self.update_status("Zoom movement too small", "orange")
+                    return
+                    
                 with self.peripherals_thread.peripherals_lock:
-                    self.peripherals_thread.ax_a_2.move_absolute(
-                        position / self.zoom_conversion_factor, Units.ANGLE_DEGREES)
+                    # Get current position first
+                    current_pos = self.peripherals_thread.ax_a_2.get_position(Units.ANGLE_DEGREES)
+                    new_position = current_pos + (relative_position / self.zoom_conversion_factor)
+                    self.peripherals_thread.ax_a_2.move_absolute(new_position, Units.ANGLE_DEGREES)
+                    
+                self.update_status(f"Zoom moved {relative_position:+.1f}° (toward {'zoom in' if relative_position > 0 else 'zoom out'})", "green")
+                # Reset entry to 0 after movement
+                self.after(100, lambda: self.zoom_position_var.set('0'))
+                
+            except ValueError:
+                self.update_status("Invalid zoom value", "red")
             except Exception as e:
                 debug_logger.error(f"Zoom error: {e}")
+                self.update_status("Zoom movement failed", "red")
         
         self.peripherals_thread.executor.submit(_update)
+
+    def update_focus_position(self, *_):
+        """Update focus position (relative movement)"""
+        def _update():
+            try:
+                if self.peripherals_thread.ax_b_1 is None:
+                    self.update_status("Focus motor not connected", "red")
+                    return
+                    
+                relative_position = float(self.focus_position_var.get())
+                if abs(relative_position) < 0.1:  # Minimum movement threshold
+                    self.update_status("Focus movement too small", "orange")
+                    return
+                    
+                with self.peripherals_thread.peripherals_lock:
+                    # Get current position first
+                    current_pos = self.peripherals_thread.ax_b_1.get_position(Units.ANGLE_DEGREES)
+                    new_position = current_pos + (relative_position / self.focus_conversion_factor)
+                    self.peripherals_thread.ax_b_1.move_absolute(new_position, Units.ANGLE_DEGREES)
+                    
+                self.update_status(f"Focus moved {relative_position:+.1f}° (toward {'far focus' if relative_position > 0 else 'near focus'})", "green")
+                # Reset entry to 0 after movement
+                self.after(100, lambda: self.focus_position_var.set('0'))
+                
+            except ValueError:
+                self.update_status("Invalid focus value", "red")
+            except Exception as e:
+                debug_logger.error(f"Focus error: {e}")
+                self.update_status("Focus movement failed", "red")
+        
+        self.peripherals_thread.executor.submit(_update)
+
+##### TBT #### 
 
     def update_focus_position(self, *_):
         """Update focus position"""
