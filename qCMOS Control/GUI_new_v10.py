@@ -495,7 +495,7 @@ class CameraThread(threading.Thread):
         defaults = {
             'READOUT_SPEED': 1.0,
             'EXPOSURE_TIME': 0.1,
-            'TRIGGER_SOURCE': 1.0,
+            'TRIGGER_SOURCE': 2.0,
             'TRIGGER_MODE': 6.0,
             'OUTPUT_TRIG_KIND_0': 3.0,
             'OUTPUT_TRIG_ACTIVE_0': 1.0,
@@ -1116,7 +1116,7 @@ class PeripheralsThread(threading.Thread):
             self.gui_ref.after(0, lambda: self.gui_ref.set_pol_stage_display(pol_stage_pos))
 
 #### TBT ###
-def initialize_focus_sequence(self):
+    def initialize_focus_sequence(self):
         """Initialize focus motor to infinity then optimal position"""
         def _focus_init():
             try:
@@ -1126,7 +1126,13 @@ def initialize_focus_sequence(self):
                     
                 with self.peripherals_lock:
                     logging.info("Starting focus initialization sequence")
-                    
+                    if self.gui_ref:
+                        self.gui_ref.after(0, lambda: self.gui_ref.update_status(
+                            "Initializing focus position", "red"))
+                        # Disable focus entry during move
+                        self.gui_ref.after(0, lambda: self.gui_ref.focus_position_entry.config(state='disabled'))
+                        self.gui_ref.after(0, lambda: self.gui_ref.set_focus_button.config(state='disabled'))
+
                     # Step 1: Move to infinity (clutch engagement)
                     logging.info("Moving focus to infinity (+400 degrees)")
                     current_pos = self.ax_b_1.get_position(Units.ANGLE_DEGREES)
@@ -1149,7 +1155,10 @@ def initialize_focus_sequence(self):
                     # Update GUI status
                     if self.gui_ref:
                         self.gui_ref.after(0, lambda: self.gui_ref.update_status(
-                            "Focus initialized to optimal position", "green"))
+                            "Focus initialization sequence complete", "green"))
+                        # Re-enable focus entry
+                        self.gui_ref.after(0, lambda: self.gui_ref.focus_position_entry.config(state='normal'))
+                        self.gui_ref.after(0, lambda: self.gui_ref.set_focus_button.config(state='normal'))
                     
             except Exception as e:
                 logging.error(f"Focus initialization error: {e}")
@@ -1257,26 +1266,25 @@ class CameraGUI(tk.Tk):
 
         # Camera Parameters
         camera_params_frame = LabelFrame(self.main_frame, text="Camera Parameters", padx=5, pady=5)
-        camera_params_frame.grid(row=0, column=0, rowspan=10, sticky='nsew')
-        self.camera_status = tk.Label(camera_params_frame, text="", justify=tk.LEFT, anchor="w", 
-                                      width=60, height=80, wraplength=400)
+        camera_params_frame.grid(row=0, column=0, sticky='nsew')
+        self.camera_status = tk.Label(camera_params_frame, text="", justify=tk.LEFT, anchor="w")
         self.camera_status.pack(fill='both', expand=True)
 
         # Status messages
         self.status_message = tk.Label(self.main_frame, text="", justify=tk.LEFT, anchor="w", 
-                                       width=40, wraplength=400, fg="blue")
-        self.status_message.grid(row=5, column=0, columnspan=2, sticky='nsew')
+                                       width=40, wraplength=400, fg="red")
+        self.status_message.grid(row=4, column=0, sticky='nsew')
 
         # GPS Timestamp display
         gps_frame = LabelFrame(self.main_frame, text="GPS Timestamp", padx=5, pady=5)
-        gps_frame.grid(row=6, column=0, columnspan=2, sticky='ew')
+        gps_frame.grid(row=1, column=0, columnspan=1, sticky='ew')
         self.gps_timestamp_label = tk.Label(gps_frame, text="No capture active", font=("Courier", 12))
         self.gps_timestamp_label.pack()
         
         # Performance display
         perf_frame = LabelFrame(self.main_frame, text="Performance", padx=5, pady=5)
-        perf_frame.grid(row=7, column=0, columnspan=2, sticky='ew')
-        self.performance_label = tk.Label(perf_frame, text="FPS: -- | Display FPS: -- | Queue: --", font=("Courier", 10))
+        perf_frame.grid(row=2, column=0, columnspan=1, sticky='ew')
+        self.performance_label = tk.Label(perf_frame, text="FPS: -- | Display FPS: -- \n Queue: --", font=("Courier", 10))
         self.performance_label.pack()
 
         # Set up control sections
@@ -1327,7 +1335,7 @@ class CameraGUI(tk.Tk):
         save_queue_size = self.camera_thread.save_queue.qsize() if self.camera_thread.save_queue else 0
         
         self.performance_label.config(
-            text=f"Capture FPS: {capture_fps:.1f} | Display FPS: {display_fps:.1f} | Frame Q: {frame_queue_size} | Save Q: {save_queue_size}"
+            text=f"Capture FPS: {capture_fps:.1f} | Display FPS: {display_fps:.1f} \n Frame Q: {frame_queue_size} | Save Q: {save_queue_size}"
         )
         
         self.after(1000, self.update_performance_monitor)
@@ -1465,20 +1473,20 @@ class CameraGUI(tk.Tk):
     def setup_display_controls(self):
         """Set up display control widgets - exactly as original"""
         display_controls_frame = LabelFrame(self.main_frame, text="Display Controls", padx=5, pady=5)
-        display_controls_frame.grid(row=4, column=1, sticky='n')
+        display_controls_frame.grid(row=3, column=0, sticky='n')
 
         Label(display_controls_frame, text="Min Count:").grid(row=0, column=0)
-        Entry(display_controls_frame, textvariable=self.min_val).grid(row=0, column=1)
+        Entry(display_controls_frame, textvariable=self.min_val, width=8).grid(row=0, column=1)
 
         Label(display_controls_frame, text="Max Count:").grid(row=0, column=2)
         self.max_val.trace_add("write", self.refresh_frame_display)
-        Entry(display_controls_frame, textvariable=self.max_val).grid(row=0, column=3)
+        Entry(display_controls_frame, textvariable=self.max_val, width=8).grid(row=0, column=3)
 
     def setup_peripherals_controls(self):
         """Set up peripheral control widgets - exactly as original"""
         self.peripherals_controls_frame = LabelFrame(self.main_frame, text="Peripherals Controls", 
                                                      padx=5, pady=5)
-        self.peripherals_controls_frame.grid(row=8, column=1, sticky='n')
+        self.peripherals_controls_frame.grid(row=4, column=1, sticky='n')
 
         # Filter control
         Label(self.peripherals_controls_frame, text="Filter:").grid(row=0, column=0)
@@ -1555,13 +1563,13 @@ class CameraGUI(tk.Tk):
         self.focus_init_button = Button(self.peripherals_controls_frame, text="Reset Focus",
                                        command=self.manual_focus_init)
         self.focus_init_button.grid(row=5, column=0, columnspan=2)
-        Label(self.peripherals_controls_frame, text="(Initialize to infinity then optimal)", 
+        Label(self.peripherals_controls_frame, text="(Initialize to near optimal focus)", 
               font=("Arial", 8), fg="gray").grid(row=5, column=2, columnspan=2, sticky='w')
 ##### TBT ####
 
     def setup_pdu_controls(self):
         """Set up PDU outlet control widgets - exactly as original"""
-        Label(self.peripherals_controls_frame, text="PDU Outlet States").grid(row=5, column=0, columnspan=4)
+        Label(self.peripherals_controls_frame, text="PDU Outlet States").grid(row=6, column=0, columnspan=4)
 
         self.pdu_outlet_dict = {
             1: 'Rotator', 2: 'Switch', 3: 'Shutter', 4: 'Empty',
@@ -1607,7 +1615,7 @@ class CameraGUI(tk.Tk):
         """Set polarization stage display without triggering callback"""
         self.wire_grid_var.set(position_string)
 
-    def update_status(self, message, color="blue"):
+    def update_status(self, message, color="red"):
         """Update status message"""
         self.after(0, lambda: self.status_message.config(text=message, fg=color))
 
@@ -2068,7 +2076,7 @@ class CameraGUI(tk.Tk):
                 
             except Exception as e:
                 logging.error(f"Take flats error: {e}")
-                self.after(0, lambda: self.update_status(f"Error: {e}", "red"))
+                self.after(0, lambda err=e: self.update_status(f"Error: {err}", "red"))
         
         if self.camera_thread.capturing:
             self.update_status("Cannot take flats while capturing", "orange")

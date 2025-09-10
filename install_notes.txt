@@ -33,7 +33,7 @@ and paths "/dev/ttyUSB0" and "/dev/ttyUSB1"
 Sometimes these get unchecked when the focusers get disconnected/unplugged.
 All of the following in Windows VM:
 5. Installed PLAY (Prima Luce AstrophotographY software), ASCOM 7.0, and SESTO SENSO 2 drivers.
-6. Checked in Device Manager that both Silicon Labs devices are showing up on COM ports
+6. Checked in Device Manager that both Silicon Labs is showing up on COM port
 7. For each focuser/ARCO: opened PLAY. Connected to COM port corresponding to focuser. Updated firmware. Calibrated SESTO SENSO 2. Calibrated ARCO.
 Also used PLAY to set to Dark Mode, which turns off LEDs on the SESTO SENSO 2 focusers (have to click arrow in bottom right corner to get to this option).
 8. Made python script with ASCOM. A commented out section of this script opened the ASCOM Chooser. Through this Chooser, I selected PLL ASCOM Rotator,
