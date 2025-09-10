@@ -895,11 +895,16 @@ class PeripheralsThread(threading.Thread):
         # Update GUI with current positions after all devices connected
         self.after_connection_update()
 
+#### TBT #### 
     def after_connection_update(self):
         """Update GUI after connections are established"""
         # Give devices a moment to settle, then update GUI
         threading.Timer(2.0, self.update_gui_with_current_positions).start()
 
+        # Initialize focus motor sequence after a short delay
+        threading.Timer(3.0, self.initialize_focus_sequence).start()
+
+#### TBT #### 
     async def connect_pdu(self):
         """Connect to PDU"""
         logging.info("Connecting to PDU")
@@ -1110,6 +1115,52 @@ class PeripheralsThread(threading.Thread):
             self.gui_ref.after(0, lambda: self.gui_ref.set_halpha_qwp_display(halpha_qwp_pos))
             self.gui_ref.after(0, lambda: self.gui_ref.set_pol_stage_display(pol_stage_pos))
 
+#### TBT ###
+def initialize_focus_sequence(self):
+        """Initialize focus motor to infinity then optimal position"""
+        def _focus_init():
+            try:
+                if self.ax_b_1 is None:
+                    logging.warning("Focus motor not available for initialization")
+                    return
+                    
+                with self.peripherals_lock:
+                    logging.info("Starting focus initialization sequence")
+                    
+                    # Step 1: Move to infinity (clutch engagement)
+                    logging.info("Moving focus to infinity (+400 degrees)")
+                    current_pos = self.ax_b_1.get_position(Units.ANGLE_DEGREES)
+                    infinity_pos = current_pos + 400
+                    self.ax_b_1.move_absolute(infinity_pos, Units.ANGLE_DEGREES)
+                    
+                    # Wait for movement to complete
+                    self.ax_b_1.wait_until_idle()
+                    
+                    # Step 2: Move to optimal focus position
+                    logging.info("Moving focus to optimal position (-75 degrees from infinity)")
+                    optimal_pos = infinity_pos - 75
+                    self.ax_b_1.move_absolute(optimal_pos, Units.ANGLE_DEGREES)
+                    
+                    # Wait for movement to complete
+                    self.ax_b_1.wait_until_idle()
+                    
+                    logging.info("Focus initialization sequence complete")
+                    
+                    # Update GUI status
+                    if self.gui_ref:
+                        self.gui_ref.after(0, lambda: self.gui_ref.update_status(
+                            "Focus initialized to optimal position", "green"))
+                    
+            except Exception as e:
+                logging.error(f"Focus initialization error: {e}")
+                if self.gui_ref:
+                    self.gui_ref.after(0, lambda: self.gui_ref.update_status(
+                        "Focus initialization failed", "red"))
+        
+        # Run in executor to avoid blocking
+        self.executor.submit(_focus_init)
+
+#### TBT ### 
 
     def disconnect_peripherals(self):
         """Disconnect all peripherals"""
@@ -1475,11 +1526,9 @@ class CameraGUI(tk.Tk):
                                          'WeDoWo', 'Wire Grid', 'Neither', command=self.update_pol_stage)
         self.wire_grid_menu.grid(row=2, column=1)
 
-######### TBT #######
         # Zoom control - separate row
         Label(self.peripherals_controls_frame, text="Relative Zoom (deg):").grid(row=3, column=0)
         self.zoom_position_var = tk.StringVar(value='0')
-        self.zoom_conversion_factor = 1
         self.zoom_position_entry = Entry(self.peripherals_controls_frame, 
                                         textvariable=self.zoom_position_var, width=8)
         self.zoom_position_entry.grid(row=3, column=1)
@@ -1492,7 +1541,6 @@ class CameraGUI(tk.Tk):
         # Focus control - separate row
         Label(self.peripherals_controls_frame, text="Relative Focus (deg):").grid(row=4, column=0)
         self.focus_position_var = tk.StringVar(value='0')
-        self.focus_conversion_factor = 1
         self.focus_position_entry = Entry(self.peripherals_controls_frame, 
                                           textvariable=self.focus_position_var, width=8)
         self.focus_position_entry.grid(row=4, column=1)
@@ -1501,7 +1549,15 @@ class CameraGUI(tk.Tk):
         self.set_focus_button.grid(row=4, column=2)
         Label(self.peripherals_controls_frame, text="(+: focus far, -: focus near)", 
               font=("Arial", 8), fg="gray").grid(row=4, column=3, sticky='w')
-######### TBT #######
+
+##### TBT ####
+        # Focus initialization button
+        self.focus_init_button = Button(self.peripherals_controls_frame, text="Reset Focus",
+                                       command=self.manual_focus_init)
+        self.focus_init_button.grid(row=5, column=0, columnspan=2)
+        Label(self.peripherals_controls_frame, text="(Initialize to infinity then optimal)", 
+              font=("Arial", 8), fg="gray").grid(row=5, column=2, columnspan=2, sticky='w')
+##### TBT ####
 
     def setup_pdu_controls(self):
         """Set up PDU outlet control widgets - exactly as original"""
@@ -1518,7 +1574,7 @@ class CameraGUI(tk.Tk):
         self.pdu_outlet_buttons = {}
         
         for idx, name in self.pdu_outlet_dict.items():
-            row = (idx - 1) % 8 + 10 #TBT
+            row = (idx - 1) % 8 + 11 #TBT 
             col = (idx - 1) // 8 * 2
             name_label = f"{idx}: {name}"
             tk.Label(self.peripherals_controls_frame, text=name_label, width=12, anchor='w')\
@@ -2120,7 +2176,6 @@ class CameraGUI(tk.Tk):
         
         self.peripherals_thread.executor.submit(_update)
 
-###### TBT ####
     def update_zoom_position(self, *_):
         """Update zoom position (relative movement)"""
         def _update():
@@ -2137,7 +2192,7 @@ class CameraGUI(tk.Tk):
                 with self.peripherals_thread.peripherals_lock:
                     # Get current position first
                     current_pos = self.peripherals_thread.ax_a_2.get_position(Units.ANGLE_DEGREES)
-                    new_position = current_pos + (relative_position / self.zoom_conversion_factor)
+                    new_position = current_pos + relative_position
                     self.peripherals_thread.ax_a_2.move_absolute(new_position, Units.ANGLE_DEGREES)
                     
                 self.update_status(f"Zoom moved {relative_position:+.1f}° (toward {'zoom in' if relative_position > 0 else 'zoom out'})", "green")
@@ -2168,7 +2223,7 @@ class CameraGUI(tk.Tk):
                 with self.peripherals_thread.peripherals_lock:
                     # Get current position first
                     current_pos = self.peripherals_thread.ax_b_1.get_position(Units.ANGLE_DEGREES)
-                    new_position = current_pos + (relative_position / self.focus_conversion_factor)
+                    new_position = current_pos + relative_position
                     self.peripherals_thread.ax_b_1.move_absolute(new_position, Units.ANGLE_DEGREES)
                     
                 self.update_status(f"Focus moved {relative_position:+.1f}° (toward {'far focus' if relative_position > 0 else 'near focus'})", "green")
@@ -2183,22 +2238,12 @@ class CameraGUI(tk.Tk):
         
         self.peripherals_thread.executor.submit(_update)
 
-##### TBT #### 
-
-    def update_focus_position(self, *_):
-        """Update focus position"""
-        def _update():
-            try:
-                if self.peripherals_thread.ax_b_1 is None:
-                    return
-                position = float(self.focus_position_var.get())
-                with self.peripherals_thread.peripherals_lock:
-                    self.peripherals_thread.ax_b_1.move_absolute(
-                        position / self.focus_conversion_factor, Units.ANGLE_DEGREES)
-            except Exception as e:
-                debug_logger.error(f"Focus error: {e}")
-        
-        self.peripherals_thread.executor.submit(_update)
+#### TBT ####
+    def manual_focus_init(self):
+            """Manually trigger focus initialization sequence"""
+            self.update_status("Initializing focus...", "blue")
+            self.peripherals_thread.initialize_focus_sequence()
+#############
 
     def toggle_outlet(self, idx, override=False):
         """Toggle PDU outlet"""
