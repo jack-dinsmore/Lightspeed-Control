@@ -749,74 +749,74 @@ class PeripheralsThread(threading.Thread):
             logging.error(f"Failed to connect to ZWO filter wheel: {e}")
             self.efw = None
 
-    # def connect_zaber_axes(self):
-    #     logging.info("Connecting to linear stages and stepper motors...")
-    #     try:
-    #         with self.peripherals_lock:
-    #             self.connection_a = Connection.open_serial_port(self.xmcc1_port)
-    #             self.connection_a.enable_alerts()
-    #             self.xmcc_a = self.connection_a.detect_devices()[0]
-    #     except Exception as e:
-    #         self.connection_a = None
-    #         self.xmcc_a = None
-    #         self.ax_a_1 = None
-    #         self.ax_a_2 = None
-    #         logging.error(f"Failed to connect to Zaber X-MCC1: {e}")
-    #         logging.info("No control available for slit stage or zoom stepper.")
+    def connect_zaber_axes(self):
+        logging.info("Connecting to linear stages and stepper motors...")
+        try:
+            with self.peripherals_lock:
+                self.connection_a = Connection.open_serial_port(self.xmcc1_port)
+                self.connection_a.enable_alerts()
+                self.xmcc_a = self.connection_a.detect_devices()[0]
+        except Exception as e:
+            self.connection_a = None
+            self.xmcc_a = None
+            self.ax_a_1 = None
+            self.ax_a_2 = None
+            logging.error(f"Failed to connect to Zaber X-MCC1: {e}")
+            logging.info("No control available for slit stage or zoom stepper.")
         
-    #     try:
-    #         with self.peripherals_lock:
-    #             self.connection_b = Connection.open_serial_port(self.xmcc2_port)
-    #             self.connection_b.enable_alerts()
-    #             self.xmcc_b = self.connection_b.detect_devices()[0]
-    #     except Exception as e:
-    #         self.connection_b = None
-    #         self.xmcc_b = None
-    #         self.ax_b_1 = None
-    #         self.ax_b_2 = None
-    #         self.ax_b_3 = None
-    #         logging.error(f"Failed to connect to Zaber X-MCC2: {e}")
-    #         logging.info("No control available for Halpha/QWP stage, polarization stage, or focus stepper.")
+        try:
+            with self.peripherals_lock:
+                self.connection_b = Connection.open_serial_port(self.xmcc2_port)
+                self.connection_b.enable_alerts()
+                self.xmcc_b = self.connection_b.detect_devices()[0]
+        except Exception as e:
+            self.connection_b = None
+            self.xmcc_b = None
+            self.ax_b_1 = None
+            self.ax_b_2 = None
+            self.ax_b_3 = None
+            logging.error(f"Failed to connect to Zaber X-MCC2: {e}")
+            logging.info("No control available for Halpha/QWP stage, polarization stage, or focus stepper.")
         
-    #     with self.peripherals_lock:
-    #         if self.xmcc_a is not None:
-    #             self.ax_a_1 = self.xmcc_a.get_axis(1)  # Slit stage
-    #             self.ax_a_2 = self.xmcc_a.get_axis(2)  # Zoom stepper
-    #             try:
-    #                 self.ax_a_1.get_position(Units.LENGTH_MILLIMETRES)
-    #                 logging.info("Slit stage connected successfully.")
-    #             except Exception as e:
-    #                 logging.error(f"Failed to get position for slit stage: {e}")
-    #                 self.ax_a_1 = None
-    #             try:
-    #                 self.ax_a_2.get_position(Units.ANGLE_DEGREES)
-    #                 logging.info("Zoom stepper connected successfully.")
-    #             except Exception as e:
-    #                 logging.error(f"Failed to get position for zoom stepper: {e}")
-    #                 self.ax_a_2 = None
+        with self.peripherals_lock:
+            if self.xmcc_a is not None:
+                self.ax_a_1 = self.xmcc_a.get_axis(1)  # Slit stage
+                self.ax_a_2 = self.xmcc_a.get_axis(2)  # Zoom stepper
+                try:
+                    self.ax_a_1.get_position(Units.LENGTH_MILLIMETRES)
+                    logging.info("Slit stage connected successfully.")
+                except Exception as e:
+                    logging.error(f"Failed to get position for slit stage: {e}")
+                    self.ax_a_1 = None
+                try:
+                    self.ax_a_2.get_position(Units.ANGLE_DEGREES)
+                    logging.info("Zoom stepper connected successfully.")
+                except Exception as e:
+                    logging.error(f"Failed to get position for zoom stepper: {e}")
+                    self.ax_a_2 = None
             
-    #         if self.xmcc_b is not None:
-    #             self.ax_b_1 = self.xmcc_b.get_axis(1)  # Focus stepper
-    #             self.ax_b_2 = self.xmcc_b.get_axis(2)  # Polarization stage
-    #             self.ax_b_3 = self.xmcc_b.get_axis(3)  # Halpha/QWP stage
-    #             try:
-    #                 self.ax_b_1.get_position(Units.ANGLE_DEGREES)
-    #                 logging.info("Focus stepper connected successfully.")
-    #             except Exception as e:
-    #                 logging.error(f"Failed to get position for focus stepper: {e}")
-    #                 self.ax_b_1 = None
-    #             try:
-    #                 self.ax_b_2.get_position(Units.LENGTH_MILLIMETRES)
-    #                 logging.info("Polarization stage connected successfully.")
-    #             except Exception as e:
-    #                 logging.error(f"Failed to get position for polarization stage: {e}")
-    #                 self.ax_b_2 = None
-    #             try:
-    #                 self.ax_b_3.get_position(Units.LENGTH_MILLIMETRES)
-    #                 logging.info("Halpha/QWP stage connected successfully.")
-    #             except Exception as e:
-    #                 logging.error(f"Failed to get position for Halpha/QWP stage: {e}")
-    #                 self.ax_b_3 = None
+            if self.xmcc_b is not None:
+                self.ax_b_1 = self.xmcc_b.get_axis(1)  # Focus stepper
+                self.ax_b_2 = self.xmcc_b.get_axis(2)  # Polarization stage
+                self.ax_b_3 = self.xmcc_b.get_axis(3)  # Halpha/QWP stage
+                try:
+                    self.ax_b_1.get_position(Units.ANGLE_DEGREES)
+                    logging.info("Focus stepper connected successfully.")
+                except Exception as e:
+                    logging.error(f"Failed to get position for focus stepper: {e}")
+                    self.ax_b_1 = None
+                try:
+                    self.ax_b_2.get_position(Units.LENGTH_MILLIMETRES)
+                    logging.info("Polarization stage connected successfully.")
+                except Exception as e:
+                    logging.error(f"Failed to get position for polarization stage: {e}")
+                    self.ax_b_2 = None
+                try:
+                    self.ax_b_3.get_position(Units.LENGTH_MILLIMETRES)
+                    logging.info("Halpha/QWP stage connected successfully.")
+                except Exception as e:
+                    logging.error(f"Failed to get position for Halpha/QWP stage: {e}")
+                    self.ax_b_3 = None
 
     def connect_zaber_axes(self):
         logging.info("Connecting to linear stages and stepper motors...")

@@ -1217,7 +1217,11 @@ class CameraGUI(tk.Tk):
 
         self.power_cycle_button = Button(camera_controls_frame, text="Power Cycle Camera",
                                          command=self.power_cycle_camera)
-        self.power_cycle_button.grid(row=6, column=0, columnspan=2)
+        self.power_cycle_button.grid(row=6, column=0, columnspan=1)
+
+        self.take_flats_button = Button(camera_controls_frame, text="Take Flats",
+                                         command=self.take_flats)
+        self.take_flats_button.grid(row=6, column=1, columnspan=1)
 
     def setup_camera_settings(self):
         """Set up camera settings widgets - exactly as original"""
@@ -1769,6 +1773,51 @@ class CameraGUI(tk.Tk):
         except Exception as e:
             logging.error(f"Power cycle error: {e}")
 
+    def take_flats(self):
+        """Take flat field images cycling through filters"""
+        def _cycle_filters():
+            try:
+                filter_sequence = [1, 2, 6, 3, 4, 5]  # u', g', 500nm, r', i', z'
+                filter_names = {1: "u'", 2: "g'", 3: "r'", 4: "i'", 5: "z'", 6: "500nm"}
+                
+                for filter_pos in filter_sequence:
+                    if self.peripherals_thread.efw is None:
+                        logging.error("Filter wheel not connected")
+                        self.update_status("Filter wheel not connected", "red")
+                        return
+                    
+                    # Set filter position
+                    with self.peripherals_thread.peripherals_lock:
+                        self.peripherals_thread.efw.SetPosition(0, filter_pos)
+                        logging.info(f"Setting filter to position {filter_pos} ({filter_names.get(filter_pos, 'Unknown')})")
+                        
+                    # Update GUI to show current filter
+                    filter_text = f"{filter_pos} ({filter_names.get(filter_pos, '')})"
+                    for key, value in self.filter_options.items():
+                        if value == filter_pos:
+                            self.after(0, lambda k=key: self.filter_position_var.set(k))
+                            break
+                    
+                    # Wait for filter wheel to settle
+                    time.sleep(2.0)
+                    
+                    # Update status
+                    self.after(0, lambda fn=filter_names.get(filter_pos): 
+                              self.update_status(f"Taking flat with filter {fn}", "blue"))
+                    
+                    # Add a small delay between filters for stability
+                    time.sleep(1.0)
+                
+                self.after(0, lambda: self.update_status("Flat sequence complete", "green"))
+                logging.info("Flat field sequence completed")
+                
+            except Exception as e:
+                logging.error(f"Take flats error: {e}")
+                self.after(0, lambda: self.update_status(f"Error taking flats: {e}", "red"))
+        
+        # Run in thread to avoid blocking GUI
+        threading.Thread(target=_cycle_filters, daemon=True).start()
+
     # Peripheral control methods - all unchanged
     def update_peripherals_status(self):
         """Update peripheral status periodically"""
@@ -1995,7 +2044,7 @@ def main():
         
         # Create and start peripherals thread
         peripherals_thread = PeripheralsThread(
-            shared_data, "200.28.147.144", "/dev/ttyACM0", "/dev/ttyACM1", app)
+            shared_data, "200.28.147.143", "/dev/ttyACM0", "/dev/ttyACM1", app)
         peripherals_thread.daemon = True
         peripherals_thread.start()
         
