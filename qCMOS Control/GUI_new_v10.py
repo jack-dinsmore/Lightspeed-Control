@@ -1873,11 +1873,11 @@ class CameraGUI(tk.Tk):
         """Update zoom position"""
         def _update():
             try:
-                if self.peripherals_thread.ax_b_2 is None:
+                if self.peripherals_thread.ax_a_2 is None:
                     return
                 position = float(self.zoom_position_var.get())
                 with self.peripherals_thread.peripherals_lock:
-                    self.peripherals_thread.ax_b_2.move_absolute(
+                    self.peripherals_thread.ax_a_2.move_absolute(
                         position / self.zoom_conversion_factor, Units.ANGLE_DEGREES)
             except Exception as e:
                 debug_logger.error(f"Zoom error: {e}")
