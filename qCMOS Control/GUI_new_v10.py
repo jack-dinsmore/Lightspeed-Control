@@ -1328,7 +1328,7 @@ class CameraGUI(tk.Tk):
         Label(self.peripherals_controls_frame, text="Filter:").grid(row=0, column=0)
         self.filter_position_var = tk.StringVar()
         self.filter_options = {'0 (Open)': 0, '1 (u\')': 1, '2 (g\')': 2, '3 (r\')': 3,
-                               '4 (i\')': 4, '5 (z\')': 5}
+                               '4 (i\')': 4, '5 (z\')': 5, '6 (500nm)': 6}
         self.filter_position_menu = OptionMenu(self.peripherals_controls_frame, self.filter_position_var,
                                                *self.filter_options.keys(),
                                                command=self.update_filter_position)
@@ -1370,15 +1370,19 @@ class CameraGUI(tk.Tk):
                                          'WeDoWo', 'Wire Grid', 'Neither', command=self.update_pol_stage)
         self.wire_grid_menu.grid(row=2, column=1)
 
-        # Zoom control
-        Label(self.peripherals_controls_frame, text="Zoom-out:").grid(row=2, column=2)
-        self.zoom_stepper_var = tk.StringVar(value='4x')
-        self.zoom_stepper_menu = OptionMenu(self.peripherals_controls_frame, self.zoom_stepper_var,
-                                            '1x', '2x', '3x', '4x', command=self.update_zoom_stepper)
-        self.zoom_stepper_menu.grid(row=2, column=3)
+        # Make zoom control identical to focus control, just moving the other stepper
+        Label(self.peripherals_controls_frame, text="Zoom Position (deg):").grid(row=2, column=2)
+        self.zoom_position_var = tk.StringVar(value='0')
+        self.zoom_conversion_factor = 1
+        self.zoom_position_entry = Entry(self.peripherals_controls_frame, 
+                                        textvariable=self.zoom_position_var)
+        self.zoom_position_entry.grid(row=2, column=3)
+        self.set_zoom_button = Button(self.peripherals_controls_frame, text="Set Zoom",
+                                     command=self.update_zoom_position)
+        self.set_zoom_button.grid(row=2, column=4)
 
         # Focus control
-        Label(self.peripherals_controls_frame, text="Focus Position (um):").grid(row=3, column=0, columnspan=2)
+        Label(self.peripherals_controls_frame, text="Focus Position (deg):").grid(row=3, column=0, columnspan=2)
         self.focus_position_var = tk.StringVar(value='0')
         self.focus_conversion_factor = 1
         self.focus_position_entry = Entry(self.peripherals_controls_frame, 
@@ -1772,7 +1776,7 @@ class CameraGUI(tk.Tk):
             self._peripheral_update_running = True
             threading.Thread(target=self._update_peripherals_background, daemon=True).start()
         
-        self.after(30000, self.update_peripherals_status)
+        self.after(1000, self.update_peripherals_status)
 
     def _update_peripherals_background(self):
         """Background peripheral update"""
@@ -1824,9 +1828,9 @@ class CameraGUI(tk.Tk):
                 option = self.slit_position_var.get()
                 with self.peripherals_thread.peripherals_lock:
                     if option == 'In beam':
-                        self.peripherals_thread.ax_a_1.move_absolute(70, Units.LENGTH_MILLIMETRES)
-                    else:
                         self.peripherals_thread.ax_a_1.move_absolute(0, Units.LENGTH_MILLIMETRES)
+                    else:
+                        self.peripherals_thread.ax_a_1.move_absolute(70, Units.LENGTH_MILLIMETRES)
             except Exception as e:
                 debug_logger.error(f"Slit error: {e}")
         
@@ -1841,6 +1845,7 @@ class CameraGUI(tk.Tk):
                 option = self.halpha_qwp_var.get()
                 positions = {'Halpha': 151.5, 'QWP': 23.15, 'Neither': 87.18}
                 with self.peripherals_thread.peripherals_lock:
+                    print(positions[option])
                     self.peripherals_thread.ax_b_3.move_absolute(
                         positions[option], Units.LENGTH_MILLIMETRES)
             except Exception as e:
@@ -1864,17 +1869,16 @@ class CameraGUI(tk.Tk):
         
         self.peripherals_thread.executor.submit(_update)
 
-    def update_zoom_stepper(self, *_):
+    def update_zoom_position(self, *_):
         """Update zoom position"""
         def _update():
             try:
-                if self.peripherals_thread.ax_a_2 is None:
+                if self.peripherals_thread.ax_b_2 is None:
                     return
-                option = self.zoom_stepper_var.get()
-                positions = {'1x': 0, '2x': 90, '3x': 180, '4x': 270}
+                position = float(self.zoom_position_var.get())
                 with self.peripherals_thread.peripherals_lock:
-                    self.peripherals_thread.ax_a_2.move_absolute(
-                        positions[option], Units.ANGLE_DEGREES)
+                    self.peripherals_thread.ax_b_2.move_absolute(
+                        position / self.zoom_conversion_factor, Units.ANGLE_DEGREES)
             except Exception as e:
                 debug_logger.error(f"Zoom error: {e}")
         
@@ -1991,7 +1995,7 @@ def main():
         
         # Create and start peripherals thread
         peripherals_thread = PeripheralsThread(
-            shared_data, "18.25.72.251", "/dev/ttyACM0", "/dev/ttyACM1", app)
+            shared_data, "200.28.147.144", "/dev/ttyACM0", "/dev/ttyACM1", app)
         peripherals_thread.daemon = True
         peripherals_thread.start()
         
