@@ -8,6 +8,7 @@ import cv2
 import queue
 import time
 from astropy.io import fits
+from GUI import CameraThread
 
 
 LC_WINDOW_SIZE = (550, 300)
@@ -140,6 +141,7 @@ class PhaseGUI(tk.Tk):
         self.timestamp_queue = timestamp_queue
         self.roi_moved = None
         self.ranges_moved = None
+        self.last_timestamp = None
 
         self.roi_center = None # Center of the ROI (pix)
         self.roi_width = None # Full width of the square ROI (pix)
@@ -161,7 +163,7 @@ class PhaseGUI(tk.Tk):
 
         # Set up GUI main frame
         self.title("Lightspeed Phasing GUI")
-        self.geometry("350x500")  # Adjust window size to tighten the layout
+        self.geometry("350x520")  # Adjust window size to tighten the layout
         self.main_frame = tk.Frame(self)
         self.main_frame.pack(expand=True, fill='both', padx=10, pady=10)
         self.main_frame.grid_columnconfigure(0, weight=1)
@@ -197,9 +199,9 @@ class PhaseGUI(tk.Tk):
         self.n_bin_entry = Entry(lc_params_frame, textvariable=self.n_bin_var)
         self.n_bin_entry.grid(row=0, column=1)
 
-        Label(lc_params_frame, text="# Buffer size (s):").grid(row=1, column=0)
-        self.buffer_size_var = tk.DoubleVar()
-        self.buffer_size_var.set(0.5)
+        Label(lc_params_frame, text="# Buffer size:").grid(row=1, column=0)
+        self.buffer_size_var = tk.IntVar()
+        self.buffer_size_var.set(500)
         self.buffer_size_var.trace_add("write", lambda *_: self.extend_buffers())
         self.buffer_size_entry = Entry(lc_params_frame, textvariable=self.buffer_size_var)
         self.buffer_size_entry.grid(row=1, column=1)
@@ -216,20 +218,27 @@ class PhaseGUI(tk.Tk):
         self.lock_roi_var.set(0)
         self.lock_roi_button = Checkbutton(lc_params_frame, variable=self.lock_roi_var, onvalue=1, offvalue=0)
         self.lock_roi_button.grid(row=3, column=1)
+        self.width_entry.grid(row=2, column=1)
 
-        Label(lc_params_frame, text="Blur:").grid(row=4, column=0)
+        Label(lc_params_frame, text="Use circular ROI:").grid(row=4, column=0)
+        self.circular_roi_var = tk.IntVar()
+        self.circular_roi_var.set(0)
+        self.circular_roi_button = Checkbutton(lc_params_frame, variable=self.circular_roi_var, onvalue=1, offvalue=0)
+        self.circular_roi_button.grid(row=4, column=1)
+
+        Label(lc_params_frame, text="Blur:").grid(row=5, column=0)
         self.blur_var = tk.DoubleVar()
         self.blur_var.set(0)
         self.blur_scale = Scale(lc_params_frame, from_=0, to_=6, resolution=0.1, length=150, variable=self.blur_var, orient=tk.HORIZONTAL)
-        self.blur_scale.grid(row=4, column=1)
+        self.blur_scale.grid(row=5, column=1)
 
         self.reset_image_button = Button(lc_params_frame, text="Reset images", command=self.clear_image)
-        self.reset_image_button.grid(row=5, column=0)
+        self.reset_image_button.grid(row=6, column=0)
         self.reset_lc_button = Button(lc_params_frame, text="Reset lightcurve", command=self.clear_lc)
-        self.reset_lc_button.grid(row=5, column=1)
+        self.reset_lc_button.grid(row=6, column=1)
 
         self.status_message = tk.Label(lc_params_frame, text="Initialized", justify=tk.LEFT, anchor="w", width=30)
-        self.status_message.grid(row=6, column=0, columnspan=2, sticky='nsew')
+        self.status_message.grid(row=7, column=0, columnspan=2, sticky='nsew')
 
         # Instructions
         lc_params_frame = LabelFrame(self.main_frame, text="Instructions", padx=5, pady=5)
@@ -239,13 +248,13 @@ class PhaseGUI(tk.Tk):
         Label(lc_params_frame, text="Then click and drag in the LC to set \"on\" range").grid(row=2, column=0)
         Label(lc_params_frame, text="Hold shift & click and drag to set the \"off\" range").grid(row=3, column=0)
         Label(lc_params_frame, text="The bottom image shows on minus off").grid(row=4, column=0)
+        Label(lc_params_frame, text="You can also right-click to place a circle").grid(row=5, column=0)
 
         # Initialize data
         if type(feed) is SavedDataThread:
             self.set_camera_data_from_file(feed)
-        # elif type(feed) is CameraThread:
-        #     self.set_camera_data_from_camera_thread(feed)
         else:
+            self.set_camera_data_from_camera_thread(feed)
             raise Exception(f"Feed of type {type(feed)} is not supported")
         
         self.clear_data()
@@ -259,12 +268,10 @@ class PhaseGUI(tk.Tk):
         """
         Set the camera feed metadata based on the camera thread
         """
-        raise NotImplementedError()
     
-        # self.t_start = # GPS time of the first frame of this data set
-        # self.n_stacks = # Number of stacked images per frame
-        # self.delta_t = # Time between each image
-        # self.image_shape = # Shape of each image
+        self.t_start = camera_thread.start_time# GPS time of the first frame of this data set
+        self.n_stacks = camera_thread.batch_size # TODO check that this is right. # Number of stacked images per frame
+        self.image_shape = (3200//self.n_stacks,512)# TODO check that this is right. # Shape of each image
 
     def set_camera_data_from_file(self, saved_data_feed):
         """
@@ -274,12 +281,10 @@ class PhaseGUI(tk.Tk):
             # Get the start time of the observation in MJD
             start_time = hdul[0].header["GPSSTART"]
             mjd = Time(start_time).jd - 2400000.5
-            delta_time_stamp = hdul[2].data["TIMESTAMP"][1] - hdul[2].data["TIMESTAMP"][0]
             frame_shape = hdul[1].data[0].shape
 
         self.t_start = mjd * 3600 * 24 # Time at which the camera started observing (seconds)
         self.n_stacks = 100 # TODO Number of stacked images in a given frame. Eventually, this should be read from the header
-        self.delta_t = delta_time_stamp / self.n_stacks # Time between stacked images
         self.image_shape = (frame_shape[0]//self.n_stacks, frame_shape[1])
 
     def on_event_image(self, event, x, y, flags, param):
@@ -331,10 +336,7 @@ class PhaseGUI(tk.Tk):
         self.off_image.extend(buffer_frame_size)
 
     def get_buffer_size(self):
-        buffer_time_limit = get_tk_value(self.buffer_size_var)
-        if np.isnan(buffer_time_limit):
-            return 1
-        buffer_frame_limit = int(np.round(buffer_time_limit / self.delta_t))
+        buffer_frame_limit = get_tk_value(self.buffer_size_var)
         return max(buffer_frame_limit, 1)
 
     def get_phase(self, timestamp):
@@ -378,8 +380,15 @@ class PhaseGUI(tk.Tk):
     def make_roi_mask(self):
         xs, ys = np.meshgrid(np.arange(self.image_shape[1]), np.arange(self.image_shape[0]))
         width = get_tk_value(self.width_var)
-        self.roi_mask = np.abs(xs - self.roi_center[0]) <= width//2
-        self.roi_mask &= np.abs(ys - self.roi_center[1]) <= width//2
+        if get_tk_value(self.circular_roi_var) == 0:
+            # Square ROI
+            self.roi_mask = np.abs(xs - self.roi_center[0]) <= width//2
+            self.roi_mask &= np.abs(ys - self.roi_center[1]) <= width//2
+        else:
+            # Circular ROI
+            dists = np.sqrt((xs - self.roi_center[0])**2 + (ys - self.roi_center[1])**2)
+            self.roi_mask = dists <= width//2
+
 
     def process_lc(self, data, timestamp):
         if self.roi_center is None:
@@ -509,10 +518,18 @@ class PhaseGUI(tk.Tk):
             # Draw ROI
             if self.roi_center is not None:
                 width = get_tk_value(self.width_var)
-                cv2.rectangle(scaled_image,
-                    (self.roi_center[0]-width//2, self.roi_center[1]-width//2),
-                    (self.roi_center[0]+width//2, self.roi_center[1]+width//2),
-                    (0, 255, 0), 1)
+                if get_tk_value(self.circular_roi_var) == 0:
+                    # Square ROI
+                    cv2.rectangle(scaled_image,
+                        (self.roi_center[0]-width//2, self.roi_center[1]-width//2),
+                        (self.roi_center[0]+width//2, self.roi_center[1]+width//2),
+                        (0, 255, 0), 1)
+                else:
+                    # Circular ROI
+                    cv2.circle(scaled_image,
+                        (self.roi_center[0], self.roi_center[1]), width//2,
+                        (0, 255, 0), 1)
+                    
         return scaled_image
 
     def display_image(self):
@@ -594,11 +611,16 @@ class PhaseGUI(tk.Tk):
         while not self.frame_queue.empty():
             frame = self.frame_queue.get_nowait()
             timestamp = self.timestamp_queue.get_nowait()
+            if self.last_timestamp is None:
+                self.last_timestamp = timestamp
+                continue
+            delta_t = (timestamp - self.last_timestamp) / self.n_stacks # Time between slices
             slice_width = frame.shape[0] // self.n_stacks # Width of each slice in pixels
             stripped_image = frame.reshape(-1, slice_width, frame.shape[1]).astype(np.uint32)
             for (strip_index, strip) in enumerate(stripped_image):
-                self.process_lc(strip, timestamp + strip_index * self.delta_t)
-                self.process_image(strip, timestamp + strip_index * self.delta_t)
+                self.process_lc(strip, timestamp + strip_index*delta_t)
+                self.process_image(strip, timestamp + strip_index*delta_t)
+            self.last_timestamp = timestamp
 
         # Display the data
         self.display_lc()
@@ -659,6 +681,5 @@ if __name__ == "__main__":
     phase_gui = PhaseGUI(frame_queue, timestamp_queue, test_thread)
 
     # Run the gui
-    phase_gui.camera_thread = test_thread
     phase_gui.protocol("WM_DELETE_WINDOW", phase_gui.on_close)
     phase_gui.mainloop()

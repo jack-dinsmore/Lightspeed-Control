@@ -1397,6 +1397,13 @@ if __name__ == "__main__":
     app.camera_thread = camera_thread
     app.peripherals_thread = peripherals_thread
 
+    # ========================================================================================
+    # THESE ARE THE TWO LINES THAT NEED TO BE ADDED TO THE GUI
+    from phasing import PhaseGUI
+    phase_gui = PhaseGUI(frame_queue, timestamp_queue, camera_thread)
+    # END TWO LINES
+    # ========================================================================================
+
     app.protocol("WM_DELETE_WINDOW", app.on_close)
     app.mainloop()
 
