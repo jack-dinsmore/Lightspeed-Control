@@ -1307,6 +1307,9 @@ class CameraGUI(tk.Tk):
         self.save_thread = None
         self.last_frame = None
         self._peripheral_update_running = False
+        # ========================================================================================
+        self.phase_gui = None
+        # ========================================================================================
         
         # Performance monitoring
         self.last_fps_update = time.time()
@@ -1850,6 +1853,10 @@ class CameraGUI(tk.Tk):
             debug_logger.info(f"Batch size: {self.cube_size_var}")
         except:
             self.cube_size_var = 100
+        # ========================================================================================
+        if self.phase_gui is not None:
+            self.phase_gui.update_batch_size(self.cube_size_var)
+        # ========================================================================================
 
     def change_binning(self, selected_binning):
         """Change camera binning"""
@@ -1974,6 +1981,11 @@ class CameraGUI(tk.Tk):
                 if self.save_thread:
                     self.save_thread.stop()
                     self.save_thread = None
+
+            # =======================================================================
+            if self.phase_gui is not None:
+                self.phase_gui.update_start_time(self.camera_thread.start_time)
+            # =======================================================================
                     
         except Exception as e:
             logging.error(f"Start capture error: {e}")
@@ -2531,6 +2543,12 @@ def main():
         # Set thread references in GUI
         app.camera_thread = camera_thread
         app.peripherals_thread = peripherals_thread
+
+        # ========================================================================================
+        from phasing import PhaseGUI
+        phase_gui = PhaseGUI(frame_queue, timestamp_queue, app)
+        app.phase_gui = phase_gui
+        # ========================================================================================
         
         # Set close handler
         app.protocol("WM_DELETE_WINDOW", app.on_close)

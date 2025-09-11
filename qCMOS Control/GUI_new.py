@@ -1029,6 +1029,9 @@ class CameraGUI(tk.Tk):
         self.display_lock = threading.Lock()  # Lock for display operations
         self.save_thread = None
         self.last_frame = None
+        # ========================================================================================
+        self.phase_gui = None
+        # ========================================================================================
 
         # Initialize percentile variables within the Tkinter root window context
         self.min_val = tk.StringVar(value="0")  # Initial min percentile set to 0%
@@ -1440,6 +1443,10 @@ class CameraGUI(tk.Tk):
         except:
             logging.error("Invalid number of frames per cube. Setting to 100.")
             self.batch_size = 100
+        # ========================================================================================
+        if self.phase_gui is not None:
+            self.phase_gui.update_batch_size(self.batch_size)
+        # ========================================================================================
 
     def update_shutter(self, *_):
         try:
@@ -1791,6 +1798,11 @@ class CameraGUI(tk.Tk):
 
             self.camera_thread.start_capture()
 
+            # =======================================================================
+            if self.phase_gui is not None:
+                self.phase_gui.update_start_time(self.camera_thread.start_time)
+            # =======================================================================
+
             # Disable controls during capture
             self.exposure_time_entry.config(state='disabled')
             self.save_data_checkbox.config(state='disabled')
@@ -1935,6 +1947,12 @@ if __name__ == "__main__":
 
         app.camera_thread = camera_thread
         app.peripherals_thread = peripherals_thread
+
+        # ========================================================================================
+        from phasing import PhaseGUI
+        phase_gui = PhaseGUI(frame_queue, timestamp_queue, app)
+        app.phase_gui = phase_gui
+        # ========================================================================================
 
         app.protocol("WM_DELETE_WINDOW", app.on_close)
         app.mainloop()
