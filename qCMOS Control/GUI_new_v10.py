@@ -866,6 +866,11 @@ class PeripheralsThread(threading.Thread):
         self.ax_b_2 = None  # Polarization stage
         self.ax_b_3 = None  # Halpha/QWP stage
 
+        # Zoom tracking
+        self.zoom_virtual_position = 153.0  # Start at middle (200mm equivalent)
+        self.zoom_reference_set = False
+        self.zoom_reference_position = None
+
     def run(self):
         """Main peripherals thread"""
         try:
@@ -895,7 +900,6 @@ class PeripheralsThread(threading.Thread):
         # Update GUI with current positions after all devices connected
         self.after_connection_update()
 
-#### TBT #### 
     def after_connection_update(self):
         """Update GUI after connections are established"""
         # Give devices a moment to settle, then update GUI
@@ -904,7 +908,6 @@ class PeripheralsThread(threading.Thread):
         # Initialize focus motor sequence after a short delay
         threading.Timer(3.0, self.initialize_focus_sequence).start()
 
-#### TBT #### 
     async def connect_pdu(self):
         """Connect to PDU"""
         logging.info("Connecting to PDU")
@@ -1115,7 +1118,6 @@ class PeripheralsThread(threading.Thread):
             self.gui_ref.after(0, lambda: self.gui_ref.set_halpha_qwp_display(halpha_qwp_pos))
             self.gui_ref.after(0, lambda: self.gui_ref.set_pol_stage_display(pol_stage_pos))
 
-#### TBT ###
     def initialize_focus_sequence(self):
         """Initialize focus motor to infinity then optimal position"""
         def _focus_init():
@@ -1168,9 +1170,72 @@ class PeripheralsThread(threading.Thread):
         
         # Run in executor to avoid blocking
         self.executor.submit(_focus_init)
+###TBT
+    def set_zoom_reference(self, virtual_position):
+            """Set current physical position as reference for virtual coordinate system"""
+            try:
+                if self.ax_a_2 is None:
+                    return False
+                    
+                with self.peripherals_lock:
+                    self.zoom_reference_position = self.ax_a_2.get_position(Units.ANGLE_DEGREES)
+                    self.zoom_virtual_position = virtual_position
+                    self.zoom_reference_set = True
+                    
+                logging.info(f"Zoom reference set: virtual={virtual_position}°, physical={self.zoom_reference_position:.1f}°")
+                return True
+            except Exception as e:
+                logging.error(f"Set zoom reference error: {e}")
+                return False
 
-#### TBT ### 
+    def move_zoom_to_virtual(self, virtual_target):
+        """Move to virtual position (0-306°)"""
+        try:
+            if self.ax_a_2 is None or not self.zoom_reference_set:
+                return False
+                
+            virtual_delta = virtual_target - self.zoom_virtual_position
+            physical_target = self.zoom_reference_position + virtual_delta
+            
+            with self.peripherals_lock:
+                self.ax_a_2.move_absolute(physical_target, Units.ANGLE_DEGREES)
+                self.zoom_virtual_position = virtual_target
+                
+            focal_length = self.virtual_to_focal_length(virtual_target)
+            logging.info(f"Zoom moved to virtual {virtual_target}° (~{focal_length}mm)")
+            return True
+            
+        except Exception as e:
+            logging.error(f"Move zoom virtual error: {e}")
+            return False
 
+    def move_zoom_relative_emergency(self, relative_degrees):
+        """Emergency relative zoom movement"""
+        try:
+            if self.ax_a_2 is None:
+                return False
+                
+            with self.peripherals_lock:
+                current_pos = self.ax_a_2.get_position(Units.ANGLE_DEGREES)
+                new_position = current_pos + relative_degrees
+                self.ax_a_2.move_absolute(new_position, Units.ANGLE_DEGREES)
+                
+                # Update virtual position if reference is set
+                if self.zoom_reference_set:
+                    self.zoom_virtual_position += relative_degrees
+                    
+            return True
+        except Exception as e:
+            logging.error(f"Emergency zoom move error: {e}")
+            return False
+
+    @staticmethod
+    def virtual_to_focal_length(virtual_pos):
+        """Convert virtual position to approximate focal length"""
+        # Linear interpolation: 0° = 100mm, 306° = 300mm
+        focal_length = 100 + (virtual_pos / 306.0) * 200
+        return int(focal_length)
+###TBT###
     def disconnect_peripherals(self):
         """Disconnect all peripherals"""
         logging.info("Disconnecting peripherals")
@@ -1534,43 +1599,71 @@ class CameraGUI(tk.Tk):
                                          'WeDoWo', 'Wire Grid', 'Neither', command=self.update_pol_stage)
         self.wire_grid_menu.grid(row=2, column=1)
 
-        # Zoom control - separate row
-        Label(self.peripherals_controls_frame, text="Relative Zoom (deg):").grid(row=3, column=0)
-        self.zoom_position_var = tk.StringVar(value='0')
-        self.zoom_position_entry = Entry(self.peripherals_controls_frame, 
-                                        textvariable=self.zoom_position_var, width=8)
-        self.zoom_position_entry.grid(row=3, column=1)
-        self.set_zoom_button = Button(self.peripherals_controls_frame, text="Move Zoom",
-                                     command=self.update_zoom_position)
-        self.set_zoom_button.grid(row=3, column=2)
-        Label(self.peripherals_controls_frame, text="(+: zoom in, -: zoom out)", 
-              font=("Arial", 8), fg="gray").grid(row=3, column=3, sticky='w')
+        ### TBT 
+        # Zoom preset controls
+        Label(self.peripherals_controls_frame, text="Zoom out by:").grid(row=3, column=0, sticky='w')
+        zoom_preset_frame = Frame(self.peripherals_controls_frame)
+        zoom_preset_frame.grid(row=3, column=1, columnspan=3, sticky='w')
+        
+        Button(zoom_preset_frame, text="3/4x", width=6, 
+               command=lambda: self.move_zoom_preset(0)).pack(side='left', padx=2)
+        Button(zoom_preset_frame, text="2x", width=6,
+               command=lambda: self.move_zoom_preset(153)).pack(side='left', padx=2)
+        Button(zoom_preset_frame, text="3x", width=6,
+               command=lambda: self.move_zoom_preset(306)).pack(side='left', padx=2)
+        
+        # Zoom reference setting
+        Label(self.peripherals_controls_frame, text="Set Reference:").grid(row=4, column=0, sticky='w')
+        zoom_ref_frame = Frame(self.peripherals_controls_frame)
+        zoom_ref_frame.grid(row=4, column=1, columnspan=3, sticky='w')
+        
+        Button(zoom_ref_frame, text="@100mm", width=7,
+               command=lambda: self.set_zoom_reference(0)).pack(side='left', padx=2)
+        Button(zoom_ref_frame, text="@200mm", width=7,
+               command=lambda: self.set_zoom_reference(153)).pack(side='left', padx=2)
+        Button(zoom_ref_frame, text="@300mm", width=7,
+               command=lambda: self.set_zoom_reference(306)).pack(side='left', padx=2)
+        
+        # Emergency relative movement (with warning)
+        Label(self.peripherals_controls_frame, text="Emergency Relative:", 
+              fg="red", font=("Arial", 9, "bold")).grid(row=5, column=0, sticky='w')
+        self.zoom_emergency_var = tk.StringVar(value='0')
+        self.zoom_emergency_entry = Entry(self.peripherals_controls_frame, 
+                                         textvariable=self.zoom_emergency_var, width=8)
+        self.zoom_emergency_entry.grid(row=5, column=1)
+        Button(self.peripherals_controls_frame, text="Move", 
+               command=self.emergency_zoom_move).grid(row=5, column=2)
+        
+        Label(self.peripherals_controls_frame, text="DO NOT USE UNLESS REQUIRED", 
+              fg="red", font=("Arial", 8, "bold")).grid(row=6, column=0, columnspan=4)
+        Label(self.peripherals_controls_frame, text="(+: toward 300mm, -: toward 100mm)", 
+              font=("Arial", 8), fg="gray").grid(row=7, column=0, columnspan=4)
+        ### TBT 
 
-        # Focus control - separate row
-        Label(self.peripherals_controls_frame, text="Relative Focus (deg):").grid(row=4, column=0)
+        # Focus control - separate row TBT
+        Label(self.peripherals_controls_frame, text="Relative Focus (deg):").grid(row=8, column=0)
         self.focus_position_var = tk.StringVar(value='0')
         self.focus_position_entry = Entry(self.peripherals_controls_frame, 
                                           textvariable=self.focus_position_var, width=8)
-        self.focus_position_entry.grid(row=4, column=1)
+        self.focus_position_entry.grid(row=8, column=1)
         self.set_focus_button = Button(self.peripherals_controls_frame, text="Move Focus",
                                        command=self.update_focus_position)
-        self.set_focus_button.grid(row=4, column=2)
+        self.set_focus_button.grid(row=8, column=2)
         Label(self.peripherals_controls_frame, text="(+: focus far, -: focus near)", 
-              font=("Arial", 8), fg="gray").grid(row=4, column=3, sticky='w')
+              font=("Arial", 8), fg="gray").grid(row=8, column=3, sticky='w')
+        ### TBT
 
-##### TBT ####
         # Focus initialization button
         self.focus_init_button = Button(self.peripherals_controls_frame, text="Reset Focus",
                                        command=self.manual_focus_init)
-        self.focus_init_button.grid(row=5, column=0, columnspan=2)
+        self.focus_init_button.grid(row=9, column=0, columnspan=2) #TBT
         Label(self.peripherals_controls_frame, text="(Initialize to near optimal focus)", 
-              font=("Arial", 8), fg="gray").grid(row=5, column=2, columnspan=2, sticky='w')
-##### TBT ####
+              font=("Arial", 8), fg="gray").grid(row=9, column=2, columnspan=2, sticky='w') #TBT
+
 
     def setup_pdu_controls(self):
         """Set up PDU outlet control widgets - exactly as original"""
-        Label(self.peripherals_controls_frame, text="PDU Outlet States").grid(row=6, column=0, columnspan=4)
-
+        Label(self.peripherals_controls_frame, text="PDU Outlet States").grid(row=10, column=0, columnspan=4) #TBT
         self.pdu_outlet_dict = {
             1: 'Rotator', 2: 'Switch', 3: 'Shutter', 4: 'Empty',
             5: 'Empty', 6: 'Empty', 7: 'Empty', 8: 'Empty',
@@ -1582,7 +1675,7 @@ class CameraGUI(tk.Tk):
         self.pdu_outlet_buttons = {}
         
         for idx, name in self.pdu_outlet_dict.items():
-            row = (idx - 1) % 8 + 11 #TBT 
+            row = (idx - 1) % 8 + 15 #TBT  
             col = (idx - 1) // 8 * 2
             name_label = f"{idx}: {name}"
             tk.Label(self.peripherals_controls_frame, text=name_label, width=12, anchor='w')\
@@ -2181,37 +2274,113 @@ class CameraGUI(tk.Tk):
         
         self.peripherals_thread.executor.submit(_update)
 
-    def update_zoom_position(self, *_):
-        """Update zoom position (relative movement)"""
-        def _update():
-            try:
-                if self.peripherals_thread.ax_a_2 is None:
-                    self.update_status("Zoom motor not connected", "red")
-                    return
+# TBT
+    # def update_zoom_position(self, *_):
+    #     """Update zoom position (relative movement)"""
+    #     def _update():
+    #         try:
+    #             if self.peripherals_thread.ax_a_2 is None:
+    #                 self.update_status("Zoom motor not connected", "red")
+    #                 return
                     
-                relative_position = float(self.zoom_position_var.get())
-                if abs(relative_position) < 0.1:  # Minimum movement threshold
-                    self.update_status("Zoom movement too small", "orange")
-                    return
+    #             relative_position = float(self.zoom_position_var.get())
+    #             if abs(relative_position) < 0.1:  # Minimum movement threshold
+    #                 self.update_status("Zoom movement too small", "orange")
+    #                 return
                     
-                with self.peripherals_thread.peripherals_lock:
-                    # Get current position first
-                    current_pos = self.peripherals_thread.ax_a_2.get_position(Units.ANGLE_DEGREES)
-                    new_position = current_pos + relative_position
-                    self.peripherals_thread.ax_a_2.move_absolute(new_position, Units.ANGLE_DEGREES)
+    #             with self.peripherals_thread.peripherals_lock:
+    #                 # Get current position first
+    #                 current_pos = self.peripherals_thread.ax_a_2.get_position(Units.ANGLE_DEGREES)
+    #                 new_position = current_pos + relative_position
+    #                 self.peripherals_thread.ax_a_2.move_absolute(new_position, Units.ANGLE_DEGREES)
                     
-                self.update_status(f"Zoom moved {relative_position:+.1f}° (toward {'zoom in' if relative_position > 0 else 'zoom out'})", "green")
-                # Reset entry to 0 after movement
-                self.after(100, lambda: self.zoom_position_var.set('0'))
+    #             self.update_status(f"Zoom moved {relative_position:+.1f}° (toward {'zoom in' if relative_position > 0 else 'zoom out'})", "green")
+    #             # Reset entry to 0 after movement
+    #             self.after(100, lambda: self.zoom_position_var.set('0'))
                 
-            except ValueError:
-                self.update_status("Invalid zoom value", "red")
-            except Exception as e:
-                debug_logger.error(f"Zoom error: {e}")
-                self.update_status("Zoom movement failed", "red")
+    #         except ValueError:
+    #             self.update_status("Invalid zoom value", "red")
+    #         except Exception as e:
+    #             debug_logger.error(f"Zoom error: {e}")
+    #             self.update_status("Zoom movement failed", "red")
         
-        self.peripherals_thread.executor.submit(_update)
+    #     self.peripherals_thread.executor.submit(_update)
+### TBT
+    def move_zoom_preset(self, virtual_position):
+            """Move zoom to preset position"""
+            if not self.peripherals_thread.zoom_reference_set:
+                messagebox.showerror("Reference Not Set", 
+                                "Please set zoom reference position first using one of the '@' buttons.")
+                return
+                
+            focal_length = self.peripherals_thread.virtual_to_focal_length(virtual_position)
+            self.update_status(f"Moving zoom to {focal_length}mm...", "blue")
+            
+            def _move():
+                if self.peripherals_thread.move_zoom_to_virtual(virtual_position):
+                    self.update_status(f"Zoom at {focal_length}mm", "green")
+                else:
+                    self.update_status("Zoom movement failed", "red")
+            
+            self.peripherals_thread.executor.submit(_move)
 
+    def set_zoom_reference(self, virtual_position):
+        """Set current position as reference for virtual coordinate system"""
+        focal_length = self.peripherals_thread.virtual_to_focal_length(virtual_position)
+        
+        response = messagebox.askyesno("Set Zoom Reference", 
+            f"Set current zoom position as {focal_length}mm reference?\n\n"
+            f"Make sure the lens is actually at {focal_length}mm before confirming.")
+        
+        if response:
+            def _set_ref():
+                if self.peripherals_thread.set_zoom_reference(virtual_position):
+                    self.update_status(f"Zoom reference set at {focal_length}mm", "green")
+                else:
+                    self.update_status("Failed to set zoom reference", "red")
+            
+            self.peripherals_thread.executor.submit(_set_ref)
+
+    def emergency_zoom_move(self):
+        """Emergency relative zoom movement with warnings"""
+        try:
+            relative_degrees = float(self.zoom_emergency_var.get())
+            if abs(relative_degrees) < 0.1:
+                self.update_status("Movement too small", "orange")
+                return
+                
+            # Multiple warnings for emergency movement
+            response = messagebox.askyesno("EMERGENCY MOVEMENT WARNING", 
+                f"You are about to move {relative_degrees:+.1f}° relatively.\n\n"
+                f"Direction: {'Toward 300mm (longer focal length)' if relative_degrees > 0 else 'Toward 100mm (shorter focal length)'}\n\n"
+                f"This bypasses safety systems and may hit mechanical limits!\n\n"
+                f"Are you absolutely sure?")
+            
+            if not response:
+                return
+                
+            if abs(relative_degrees) > 100:
+                response2 = messagebox.askyesno("LARGE MOVEMENT WARNING", 
+                    f"{abs(relative_degrees):.1f}° is a very large movement!\n\n"
+                    f"This could damage the lens mechanism.\n\n"
+                    f"Continue anyway?")
+                if not response2:
+                    return
+            
+            self.update_status(f"Emergency zoom move {relative_degrees:+.1f}°...", "orange")
+            
+            def _emergency_move():
+                if self.peripherals_thread.move_zoom_relative_emergency(relative_degrees):
+                    self.update_status(f"Emergency move {relative_degrees:+.1f}° complete", "orange")
+                    self.after(100, lambda: self.zoom_emergency_var.set('0'))
+                else:
+                    self.update_status("Emergency move failed", "red")
+            
+            self.peripherals_thread.executor.submit(_emergency_move)
+            
+        except ValueError:
+            self.update_status("Invalid emergency movement value", "red")
+### TBT
     def update_focus_position(self, *_):
         """Update focus position (relative movement)"""
         def _update():
@@ -2243,12 +2412,10 @@ class CameraGUI(tk.Tk):
         
         self.peripherals_thread.executor.submit(_update)
 
-#### TBT ####
     def manual_focus_init(self):
             """Manually trigger focus initialization sequence"""
             self.update_status("Initializing focus...", "blue")
             self.peripherals_thread.initialize_focus_sequence()
-#############
 
     def toggle_outlet(self, idx, override=False):
         """Toggle PDU outlet"""
