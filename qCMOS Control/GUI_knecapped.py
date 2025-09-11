@@ -1,8 +1,8 @@
 import tkinter as tk
 from tkinter import StringVar, OptionMenu, Checkbutton, Label, Entry, Button, Scale, Frame, LabelFrame, messagebox
-from dcam import Dcamapi, Dcam, DCAMERR
+# from dcam import Dcamapi, Dcam, DCAMERR
 from camera_params import CAMERA_PARAMS, DISPLAY_PARAMS
-import GPS_time
+# import GPS_time
 import threading
 import time
 import numpy as np
@@ -13,14 +13,18 @@ from datetime import datetime
 from astropy.time import Time
 import os
 import warnings
+
+import sys
+sys.path.append("../PyZWOEFW-main")
+
 from PyZWOEFW import EFW
 import asyncio
-from cyberpower_pdu import CyberPowerPDU, OutletCommand
-from labjack import ljm
-from zaber_motion import Units
-from zaber_motion.ascii import Connection
+# from cyberpower_pdu import CyberPowerPDU, OutletCommand
+# from labjack import ljm
+# from zaber_motion import Units
+# from zaber_motion.ascii import Connection
 import ctypes
-ctypes.CDLL("libudev.so.1", mode=ctypes.RTLD_GLOBAL)
+# ctypes.CDLL("libudev.so.1", mode=ctypes.RTLD_GLOBAL)
 
 
 class SharedData:
@@ -273,7 +277,6 @@ class CameraThread(threading.Thread):
                     if self.first_frame:
                         self.start_time = GPS_time.get_first_timestamp()
                         self.first_frame = False  # Prevent further updates
-
 
                     # Increment the frame index
                     self.frame_index += 1
@@ -980,7 +983,7 @@ class CameraGUI(tk.Tk):
         if self.phase_gui is not None:
             self.phase_gui.update_batch_size(self.batch_size)
         # ========================================================================================
-        
+
     def update_shutter(self, *_):
         # Check that LabJack is connected.
         if self.peripherals_thread.ljm_handle is None:
@@ -1385,6 +1388,7 @@ class CameraGUI(tk.Tk):
             self.camera_thread.join()  # Wait for the camera thread to finish
 
 if __name__ == "__main__":
+    print("\n\nJack deliberately broke this file so that he could test it without the camera. Don't record data with it! It won't work.\n\n")
 
     shared_data = SharedData()
     frame_queue = queue.Queue(maxsize=3)  # Limit the size of the frame queue

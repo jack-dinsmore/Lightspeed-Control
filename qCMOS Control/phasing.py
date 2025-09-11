@@ -8,7 +8,6 @@ import cv2
 import queue
 import time
 from astropy.io import fits
-from GUI import CameraThread
 
 
 LC_WINDOW_SIZE = (550, 300)
@@ -254,8 +253,7 @@ class PhaseGUI(tk.Tk):
         if type(feed) is SavedDataThread:
             self.set_camera_data_from_file(feed)
         else:
-            self.set_camera_data_from_camera_thread(feed)
-            raise Exception(f"Feed of type {type(feed)} is not supported")
+            self.set_camera_data_from_camera_gui(feed)
         
         self.clear_data()
         self.update_frame_display()
@@ -264,13 +262,12 @@ class PhaseGUI(tk.Tk):
         cv2.destroyAllWindows()
         self.destroy()
 
-    def set_camera_data_from_camera_thread(self, camera_thread):
+    def set_camera_data_from_camera_gui(self, camera_gui):
         """
         Set the camera feed metadata based on the camera thread
         """
-    
-        self.t_start = camera_thread.start_time# GPS time of the first frame of this data set
-        self.n_stacks = camera_thread.batch_size # TODO check that this is right. # Number of stacked images per frame
+        self.t_start = 0# GPS time of the first frame of this data set
+        self.n_stacks = camera_gui.batch_size # TODO check that this is right. # Number of stacked images per frame
         self.image_shape = (3200//self.n_stacks,512)# TODO check that this is right. # Shape of each image
 
     def set_camera_data_from_file(self, saved_data_feed):
@@ -286,6 +283,16 @@ class PhaseGUI(tk.Tk):
         self.t_start = mjd * 3600 * 24 # Time at which the camera started observing (seconds)
         self.n_stacks = 100 # TODO Number of stacked images in a given frame. Eventually, this should be read from the header
         self.image_shape = (frame_shape[0]//self.n_stacks, frame_shape[1])
+
+    def update_batch_size(self, batch_size):
+        self.n_stacks = batch_size # TODO check that this is right.
+        self.image_shape = (3200//self.n_stacks,512)# TODO check that this is right.
+        self.on_image = None
+        self.off_image = None
+        self.clear_image()
+
+    def update_start_time(self, start_time):
+        self.t_start = start_time
 
     def on_event_image(self, event, x, y, flags, param):
         left_down = (flags & cv2.EVENT_FLAG_LBUTTON)!=0
@@ -672,7 +679,7 @@ if __name__ == "__main__":
     test_thread.start()
 
     # The GUI is also designed to run off the the CameraThread, which feeds realtime data. But to do
-    # this, the `PhaseGUI.set_camera_data_from_camera_thread` function will have to be implemented.
+    # this, the `PhaseGUI.set_camera_data_from_camera_gui` function will have to be implemented.
     # It should read in some basic metadata about how the images in the frame_queue are formatted.
     # test_thread = CameraThread(shared_data, frame_queue, timestamp_queue, app)
     # test_thread.start()
