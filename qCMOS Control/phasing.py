@@ -11,7 +11,6 @@ import time
 import os
 from astropy.io import fits
 
-
 LC_WINDOW_SIZE = (550, 300)
 LC_LEFT_BOUND = 50 # left bound of the plot
 LC_LOWER_BOUND = LC_WINDOW_SIZE[1]-40 # Lower bound of the plot
@@ -268,30 +267,33 @@ class PhaseGUI(tk.Tk):
         """
         Set the camera feed metadata based on the camera thread
         """
-        self.t_start = 0# GPS time of the first frame of this data set
-        self.n_stacks = camera_gui.batch_size # TODO check that this is right. # Number of stacked images per frame
-        self.image_shape = (3200//self.n_stacks,512)# TODO check that this is right. # Shape of each image
+        self.t_start = 2e8# GPS time of the first frame of this data set
+        self.n_framebundle = camera_gui.batch_size # TODO check that this is right. # Number of stacked images per frame
+        self.image_shape = (3200//self.n_framebundle,512)# TODO check that this is right. # Shape of each image
 
     def set_camera_data_from_file(self, saved_data_feed):
         """
         Set the camera feed metadata based on a file's header
         """
-        with fits.open(saved_data_feed.filename) as hdul:
+        with fits.open(saved_data_feed.start_filename) as hdul:
             # Get the start time of the observation in MJD
-            start_time = hdul[0].header["GPSSTART"]
-            mjd = Time(start_time).jd - 2400000.5
+            try:
+                start_time = hdul[0].header["GPSSTART"]
+                mjd = Time(start_time).jd - 2400000.5
+            except:
+                mjd = 0
             frame_shape = hdul[1].data[0].shape
             try:
-                self.n_stacks = hdul[1].header["HIERARCH FRAMEBUNDLE NUMBER"]
+                self.n_framebundle = int(hdul[1].header["HIERARCH FRAMEBUNDLE NUMBER"])
             except:
-                self.n_stacks = 100
+                self.n_framebundle = 100
 
         self.t_start = mjd * 3600 * 24 # Time at which the camera started observing (seconds)
-        self.image_shape = (frame_shape[0]//self.n_stacks, frame_shape[1])
+        self.image_shape = (frame_shape[0]//self.n_framebundle, frame_shape[1])
 
     def update_batch_size(self, batch_size):
-        self.n_stacks = batch_size # TODO check that this is right.
-        self.image_shape = (3200//self.n_stacks,512) # TODO check that this is right.
+        self.n_framebundle = batch_size # TODO check that this is right.
+        self.image_shape = (3200//self.n_framebundle,512) # TODO check that this is right.
         self.on_image = None
         self.off_image = None
         self.clear_image()
@@ -356,7 +358,8 @@ class PhaseGUI(tk.Tk):
         Get the phase of an event with the provided ephemeris and timestamp
         """
         pepoch = get_tk_value(self.pepoch_var)
-        freq  =get_tk_value(self.freq_var)
+        freq = get_tk_value(self.freq_var)
+        if freq <= 0 or np.isnan(freq): return 1e-5
         delta_time = self.t_start + timestamp - pepoch * 3600 * 24
         phase = delta_time * freq
         phase -= np.floor(phase)
@@ -440,8 +443,9 @@ class PhaseGUI(tk.Tk):
         if np.mean(lc_fluxes) > 0:
             lc_errorbar /= np.mean(lc_fluxes)
             lc_fluxes /= np.mean(lc_fluxes)
-        vmin = 0.9*np.min(lc_fluxes)
-        vmax = 1.1*np.max(lc_fluxes) + 1e-5
+        lc_span = np.max(lc_fluxes) - np.min(lc_fluxes)
+        vmin = np.min(lc_fluxes) - lc_span*0.05
+        vmax = np.max(lc_fluxes) + lc_span*0.05 + 1e-5
 
         image = np.zeros((LC_WINDOW_SIZE[1], LC_WINDOW_SIZE[0], 3), np.uint8)
 
@@ -514,7 +518,7 @@ class PhaseGUI(tk.Tk):
                 scaled_image = convolve(scaled_image, gauss, mode="same")
 
         # Stretch
-        scaled_image = np.exp(STRETCH_SEVERITY*(self.stretch[1]-0.5)) * (scaled_image - self.stretch[0]) + self.stretch[0]
+        scaled_image = np.exp(STRETCH_SEVERITY*(0.5-self.stretch[1])) * (scaled_image - self.stretch[0]) + self.stretch[0]
 
         # Prepare for drawing
         scaled_image[~np.isfinite(scaled_image)] = 0
@@ -563,6 +567,8 @@ class PhaseGUI(tk.Tk):
             on_image = self.on_image.get().astype(float)
             off_image = self.off_image.get().astype(float)
             difference_image = on_image / get_phase_duration(self.on_range) - off_image / get_phase_duration(self.off_range)
+            vmin = 0#np.min(difference_image)
+            vmax = np.max(difference_image)
             stretched_difference = self.apply_stretch(difference_image, vmin, vmax)
             merged_image[self.image_shape[0]+1:2*self.image_shape[0]+1,:, :] = stretched_difference
 
@@ -626,8 +632,8 @@ class PhaseGUI(tk.Tk):
             if self.last_timestamp is None:
                 self.last_timestamp = timestamp
                 continue
-            delta_t = (timestamp - self.last_timestamp) / self.n_stacks # Time between slices
-            slice_width = frame.shape[0] // self.n_stacks # Width of each slice in pixels
+            delta_t = (timestamp - self.last_timestamp) / self.n_framebundle # Time between slices
+            slice_width = frame.shape[0] // self.n_framebundle # Width of each slice in pixels
             stripped_image = frame.reshape(-1, slice_width, frame.shape[1]).astype(np.uint32)
             for (strip_index, strip) in enumerate(stripped_image):
                 self.process_lc(strip, timestamp + strip_index*delta_t)
@@ -642,58 +648,81 @@ class PhaseGUI(tk.Tk):
         self.after(50, self.update_frame_display)  # About 20 FPS
 
 class SavedDataThread(threading.Thread):
-    def __init__(self, filename, frame_queue, timestamp_queue):
+    def __init__(self, object_name, frame_queue, timestamp_queue, day_string=None, time_string=None, start_index=None):
         """
-        Feed data from a saved file into the GUI
+        Feed data from a saved file into the GUI.
+        # Arguments:
+        * object_name: the name of the object as reported in the data cube file name
+        * frame_queue: the frame queue
+        * timestamp_queue: the frame queue
+        * day_string: The dataset day as reported in the data cube file name. Set to None (default) to chose today
+        * time_string: The time of capture as reported in the data cube file name. Set to None (default) to chose the latest
+        * start_index: The data cube index. Set to None to chose 1.
         """
         super().__init__()
         self.frame_queue = frame_queue
         self.timestamp_queue = timestamp_queue
-        self.load_file(filename)
 
-    def load_file(self, filename):
-        print(f"Loading file {filename}")
-        self.filename = filename
-        with fits.open(filename) as hdul:
-            self.frames = np.array(hdul[1].data)
-            self.timestamps = hdul[2].data["TIMESTAMP"]
-            self.framestamps = hdul[2].data["FRAMESTAMP"]
-        self.time_between_frames = self.timestamps[1] - self.timestamps[0]
+        if day_string is None:
+            day_string = datetime.date.today().strftime("%Y%m%d")
+
+        if start_index is None:
+            start_index = 1
+
+        if time_string is None:
+            time_string = None
+            for f in os.listdir("../captures"):
+                if not f.startswith(f"{object_name}_{day_string}"):
+                    continue
+                if not f.endswith(f"cube{start_index:03d}.fits"):
+                    continue
+                this_file_time_string = f.split("_")[-2]
+
+                if time_string is None or int(this_file_time_string) > int(time_string):
+                    time_string = this_file_time_string
+        if time_string is None:
+            raise Exception(f"Could not find any cubes for object {object_name} at time {day_string} with index {start_index}")
+
+        self.object_name = object_name
+        self.day_string = day_string
+        self.time_string = time_string
+        self.start_index = start_index
+        self.start_filename = f"../captures/{self.object_name}_{self.day_string}_{self.time_string}_cube{self.start_index:03d}.fits"
 
     def run(self):
         threading.Thread(target=self.submit_to_queue, daemon=True).start()
 
     def submit_to_queue(self):
-        start = time.time()
-        for frame_index, (frame, timestamp) in enumerate(zip(self.frames, self.timestamps)):
-            desired_time = (timestamp - self.timestamps[0]) + start
-            time.sleep(max(desired_time - time.time(), 0)) # Sleep until the next frame is due
-            try:
-                self.frame_queue.put_nowait(frame)
-                self.timestamp_queue.put_nowait(timestamp)
-            except queue.Full:
-                self.frame_queue.get_nowait()
-                self.timestamp_queue.get_nowait()
-                self.frame_queue.put_nowait(frame)
-                self.timestamp_queue.put_nowait(timestamp)
-        print("File completed")
+        # Read in all files
+        for cube_index in range(self.start_index, 1_000_000):
+            filename = f"../captures/{self.object_name}_{self.day_string}_{self.time_string}_cube{cube_index:03d}.fits"
 
-        prefix = self.filename.index("cube")
-        cube_index = int(self.filename[prefix+4:-5])
-        cube_index += 1
-        next_filename = f"{self.filename[:prefix]}cube{cube_index:03d}.fits"
-
-        # Check if the file exists. If it doesn't, wait for up to two seconds for it to be created
-        for _ in range(20):
-            if os.path.exists(next_filename):
+            # Check if filename exists
+            for _ in range(20):
+                if os.path.exists(filename):
+                    break
+                time.sleep(0.1)
+            if not os.path.exists(filename):
+                print(f"Could not find file {filename}. Feed stopped")
                 break
-            time.sleep(0.1)
-        if not os.path.exists(next_filename):
-            print(f"Could not find file {next_filename}.")
-            print("Feed stopped")
-        else:
-            self.load_file(next_filename)
-            self.submit_to_queue()
+
+            print(f"Loading file {filename}")
+            with fits.open(filename) as hdul:
+                frames = np.array(hdul[1].data)
+                timestamps = hdul[2].data["TIMESTAMP"]
+                framestamps = hdul[2].data["FRAMESTAMP"]
+
+            # Submit frames
+            start = time.time()
+            for frame, timestamp in zip(frames, timestamps):
+                desired_time = (timestamp - timestamps[0]) + start
+                time.sleep(max(desired_time - time.time(), 0)) # Sleep until the next frame is due
+                if self.frame_queue.full():
+                    self.frame_queue.get_nowait()
+                    self.timestamp_queue.get_nowait()
+                self.frame_queue.put_nowait(frame)
+                self.timestamp_queue.put_nowait(timestamp)
+            print("File completed")
 
 if __name__ == "__main__":
     # Create shared queues containing the data coming from the camera / saved data.
@@ -703,17 +732,9 @@ if __name__ == "__main__":
 
     # Create the thread to feed the GUI data from a FITS file.
     
-    today_str = datetime.date.today().strftime("%Y%m%d")
-    obs_no = "XXX" # PLEASE CHANGE
-    test_thread = SavedDataThread(f"../captures/crab1000_{today_str}_{obs_no}_cube001.fits", frame_queue, timestamp_queue)
-    # test_thread = SavedDataThread("../captures/crab1000_20241026_101129049763441_cube066.fits", frame_queue, timestamp_queue)
+    # test_thread = SavedDataThread("crab1000", frame_queue, timestamp_queue, day_string="20241026", start_index=66)
+    test_thread = SavedDataThread("crab_0", frame_queue, timestamp_queue)
     test_thread.start()
-
-    # The GUI is also designed to run off the the CameraThread, which feeds realtime data. But to do
-    # this, the `PhaseGUI.set_camera_data_from_camera_gui` function will have to be implemented.
-    # It should read in some basic metadata about how the images in the frame_queue are formatted.
-    # test_thread = CameraThread(shared_data, frame_queue, timestamp_queue, app)
-    # test_thread.start()
 
     # Create the gui
     phase_gui = PhaseGUI(frame_queue, timestamp_queue, test_thread)
