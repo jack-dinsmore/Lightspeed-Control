@@ -15,7 +15,6 @@ LC_WINDOW_SIZE = (550, 300)
 LC_LEFT_BOUND = 50 # left bound of the plot
 LC_LOWER_BOUND = LC_WINDOW_SIZE[1]-40 # Lower bound of the plot
 STRETCH_SEVERITY=10
-IMAGE_BOTTOM_BUFFER=50
 
 def show_span(image, r, color):
     plot_width = LC_WINDOW_SIZE[0] - LC_LEFT_BOUND
@@ -176,14 +175,15 @@ class PhaseGUI(tk.Tk):
 
         Label(ephemeris_frame, text="PEPOCH (MJD):").grid(row=0, column=0)
         self.pepoch_var = tk.DoubleVar()
-        self.pepoch_var.set(60629)
+        self.pepoch_var.set(60930)
         self.pepoch_var.trace_add("write", lambda *_: self.clear_data())
         self.pepoch_entry = Entry(ephemeris_frame, textvariable=self.pepoch_var)
         self.pepoch_entry.grid(row=0, column=1)
 
         Label(ephemeris_frame, text="Frequency (Hz):").grid(row=1, column=0)
         self.freq_var = tk.DoubleVar()
-        self.freq_var.set(29.5552429346)
+        self.freq_var.set(29.545715652039586) # Crab
+        # self.freq_var.set(19.616733064469113) # B0540
         self.freq_var.trace_add("write", lambda *_: self.clear_data())
         self.freq_entry = Entry(ephemeris_frame, textvariable=self.freq_var)
         self.freq_entry.grid(row=1, column=1)
@@ -308,7 +308,7 @@ class PhaseGUI(tk.Tk):
             if control_down:
                 self.stretch = [
                     (x/(self.image_shape[1])),
-                    1-(y/(self.image_shape[0]*2+1+IMAGE_BOTTOM_BUFFER))
+                    1-(y/(self.image_shape[0]*3+1+10))
                 ]
             else:
                 # Place ROI
@@ -410,7 +410,7 @@ class PhaseGUI(tk.Tk):
             return
         
         # Get flux within ROI
-        flux = np.sum(data[self.roi_mask])
+        flux = np.sum(data[self.roi_mask]) - 200 * np.sum(self.roi_mask)
 
         # Add to the LC
         phase = self.get_phase(timestamp)
@@ -468,7 +468,10 @@ class PhaseGUI(tk.Tk):
 
             # Show errorbar
             mid_x = (start_x + end_x) // 2
-            barh = int(np.round(LC_LOWER_BOUND * lc_errorbar[i] / (vmax - vmin)))
+            try:
+                barh = int(np.round(LC_LOWER_BOUND * lc_errorbar[i] / (vmax - vmin)))
+            except:
+                barh = 0
             cv2.line(image, (mid_x, y+barh), (mid_x, y-barh), (255, 255, 255))
         hist_pts = np.array(hist_pts, np.int32).reshape(-1,1,2)
         cv2.polylines(image, [hist_pts], False, (255, 255, 255), 2)
@@ -557,7 +560,7 @@ class PhaseGUI(tk.Tk):
         total_image = self.total_image.get().astype(float)
         vmin = np.min(total_image)
         vmax = np.max(total_image)
-        merged_image = np.zeros((2*self.image_shape[0]+1+IMAGE_BOTTOM_BUFFER, self.image_shape[1], 3), np.uint8)
+        merged_image = np.zeros((3*self.image_shape[0]+1+10, self.image_shape[1], 3), np.uint8)
 
         stretched_total = self.apply_stretch(total_image, vmin, vmax)
         merged_image[:self.image_shape[0], :, :] = stretched_total
@@ -567,7 +570,7 @@ class PhaseGUI(tk.Tk):
             on_image = self.on_image.get().astype(float)
             off_image = self.off_image.get().astype(float)
             difference_image = on_image / get_phase_duration(self.on_range) - off_image / get_phase_duration(self.off_range)
-            vmin = 0#np.min(difference_image)
+            vmin = np.min(difference_image)
             vmax = np.max(difference_image)
             stretched_difference = self.apply_stretch(difference_image, vmin, vmax)
             merged_image[self.image_shape[0]+1:2*self.image_shape[0]+1,:, :] = stretched_difference
@@ -575,9 +578,10 @@ class PhaseGUI(tk.Tk):
             if np.sum(on_image) == 0:
                 snr_metric = 0
             else:
-                mean_roi_flux = np.sum(difference_image[self.roi_mask]) / np.sum(self.roi_mask)
+                mean_difference_image_flux = np.mean(difference_image[~self.roi_mask])
+                mean_roi_difference = np.mean(difference_image[self.roi_mask]) - mean_difference_image_flux
                 variance_of_background = np.var(difference_image[~self.roi_mask])
-                snr_metric = mean_roi_flux**2 / variance_of_background
+                snr_metric = mean_roi_difference**2 / variance_of_background
 
         # Add the colorbar
         colorbar = np.zeros((10, self.image_shape[1]))
@@ -723,6 +727,8 @@ class SavedDataThread(threading.Thread):
                 self.frame_queue.put_nowait(frame)
                 self.timestamp_queue.put_nowait(timestamp)
             print("File completed")
+
+        self.submit_to_queue() # TODO
 
 if __name__ == "__main__":
     # Create shared queues containing the data coming from the camera / saved data.
