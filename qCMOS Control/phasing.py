@@ -728,8 +728,6 @@ class SavedDataThread(threading.Thread):
                 self.timestamp_queue.put_nowait(timestamp)
             print("File completed")
 
-        self.submit_to_queue() # TODO
-
 if __name__ == "__main__":
     # Create shared queues containing the data coming from the camera / saved data.
     QUEUE_MAXSIZE = 8
