@@ -3,10 +3,12 @@ from scipy.signal import convolve
 import tkinter as tk
 from tkinter import Label, Entry, Button, Scale, LabelFrame, Checkbutton
 import threading
+import datetime
 from astropy.time import Time
 import cv2
 import queue
 import time
+import os
 from astropy.io import fits
 
 
@@ -279,14 +281,17 @@ class PhaseGUI(tk.Tk):
             start_time = hdul[0].header["GPSSTART"]
             mjd = Time(start_time).jd - 2400000.5
             frame_shape = hdul[1].data[0].shape
+            try:
+                self.n_stacks = hdul[1].header["HIERARCH FRAMEBUNDLE NUMBER"]
+            except:
+                self.n_stacks = 100
 
         self.t_start = mjd * 3600 * 24 # Time at which the camera started observing (seconds)
-        self.n_stacks = 100 # TODO Number of stacked images in a given frame. Eventually, this should be read from the header
         self.image_shape = (frame_shape[0]//self.n_stacks, frame_shape[1])
 
     def update_batch_size(self, batch_size):
         self.n_stacks = batch_size # TODO check that this is right.
-        self.image_shape = (3200//self.n_stacks,512)# TODO check that this is right.
+        self.image_shape = (3200//self.n_stacks,512) # TODO check that this is right.
         self.on_image = None
         self.off_image = None
         self.clear_image()
@@ -307,7 +312,7 @@ class PhaseGUI(tk.Tk):
                 # Place ROI
                 if y >= 0:
                     self.roi_moved = (x, y % self.image_shape[0])
-        elif event == cv2.EVENT_RBUTTONDOWN:
+        elif event == cv2.EVENT_RBUTTONDOWN and not control_down:
             # Place marker
             self.marker = (x, y % self.image_shape[0])
 
@@ -644,6 +649,10 @@ class SavedDataThread(threading.Thread):
         super().__init__()
         self.frame_queue = frame_queue
         self.timestamp_queue = timestamp_queue
+        self.load_file(filename)
+
+    def load_file(self, filename):
+        print(f"Loading file {filename}")
         self.filename = filename
         with fits.open(filename) as hdul:
             self.frames = np.array(hdul[1].data)
@@ -652,12 +661,13 @@ class SavedDataThread(threading.Thread):
         self.time_between_frames = self.timestamps[1] - self.timestamps[0]
 
     def run(self):
-        threading.Thread(target=self.load_file, daemon=True).start()
+        threading.Thread(target=self.submit_to_queue, daemon=True).start()
 
-    def load_file(self):
-        for (frame, timestamp) in zip(self.frames, self.timestamps):
-            # time.sleep(self.time_between_frames) # Use this line of code for a real run to deliver real-time data
-            time.sleep(0.5) # Use this line for debugging purposes, to make the data stream last longer.
+    def submit_to_queue(self):
+        start = time.time()
+        for frame_index, (frame, timestamp) in enumerate(zip(self.frames, self.timestamps)):
+            desired_time = (timestamp - self.timestamps[0]) + start
+            time.sleep(max(desired_time - time.time(), 0)) # Sleep until the next frame is due
             try:
                 self.frame_queue.put_nowait(frame)
                 self.timestamp_queue.put_nowait(timestamp)
@@ -668,14 +678,35 @@ class SavedDataThread(threading.Thread):
                 self.timestamp_queue.put_nowait(timestamp)
         print("File completed")
 
+        prefix = self.filename.index("cube")
+        cube_index = int(self.filename[prefix+4:-5])
+        cube_index += 1
+        next_filename = f"{self.filename[:prefix]}cube{cube_index:03d}.fits"
+
+        # Check if the file exists. If it doesn't, wait for up to two seconds for it to be created
+        for _ in range(20):
+            if os.path.exists(next_filename):
+                break
+            time.sleep(0.1)
+        if not os.path.exists(next_filename):
+            print(f"Could not find file {next_filename}.")
+            print("Feed stopped")
+        else:
+            self.load_file(next_filename)
+            self.submit_to_queue()
+
 if __name__ == "__main__":
     # Create shared queues containing the data coming from the camera / saved data.
-    QUEUE_MAXSIZE = 100
+    QUEUE_MAXSIZE = 8
     frame_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
     timestamp_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
 
     # Create the thread to feed the GUI data from a FITS file.
-    test_thread = SavedDataThread("../../data/crab1000_20241026_101129049763441_cube066.fits", frame_queue, timestamp_queue)
+    
+    today_str = datetime.date.today().strftime("%Y%m%d")
+    obs_no = "XXX" # PLEASE CHANGE
+    test_thread = SavedDataThread(f"../captures/crab1000_{today_str}_{obs_no}_cube001.fits", frame_queue, timestamp_queue)
+    # test_thread = SavedDataThread("../captures/crab1000_20241026_101129049763441_cube066.fits", frame_queue, timestamp_queue)
     test_thread.start()
 
     # The GUI is also designed to run off the the CameraThread, which feeds realtime data. But to do
