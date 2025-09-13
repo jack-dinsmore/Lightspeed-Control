@@ -469,7 +469,7 @@ class PhaseGUI(tk.Tk):
 
         plot_width = LC_WINDOW_SIZE[0]-LC_LEFT_BOUND # left bound of the plot
         lc_fluxes = self.lc_fluxes.get()
-        lc_errorbar = np.sqrt(lc_fluxes)
+        lc_errorbar = np.sqrt(lc_fluxes + 1e-5)
         if np.mean(lc_fluxes) > 0:
             lc_errorbar /= np.mean(lc_fluxes)
             lc_fluxes /= np.mean(lc_fluxes)
@@ -763,8 +763,6 @@ class SavedDataThread(threading.Thread):
                     self.timestamp_queue.get_nowait()
                 self.frame_queue.put_nowait(frame)
                 self.timestamp_queue.put_nowait(timestamp)
-            print("File completed")
-        self.submit_to_queue() # TODO
 
 if __name__ == "__main__":
     # Create shared queues containing the data coming from the camera / saved data.
@@ -773,11 +771,23 @@ if __name__ == "__main__":
     timestamp_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
 
     # Create the thread to feed the GUI data from a FITS file.
-    source_name = "crab_0"
     if len(sys.argv) > 1:
         source_name = sys.argv[1]
+        time_string=None
+        day_string = None
         print(f"Reading name `{source_name}` from command line arguments")
-    test_thread = SavedDataThread(source_name, frame_queue, timestamp_queue, day_string="20250912")
+        if len(sys.argv) > 2:
+            day_string = sys.argv[2]
+            print(f"Reading day string `{day_string}` from command line arguments")
+        if len(sys.argv) > 3:
+            time_string = sys.argv[3]
+            print(f"Reading time string `{time_string}` from command line arguments")
+    else:
+        print("No command line arguments were found. Loading test dataset.")
+        source_name = "crab_0"
+        day_string="20250912"
+        time_string=None
+    test_thread = SavedDataThread(source_name, frame_queue, timestamp_queue, time_string=time_string, day_string=day_string)
     test_thread.start()
 
     # Create the gui
