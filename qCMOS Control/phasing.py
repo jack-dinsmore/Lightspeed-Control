@@ -9,6 +9,7 @@ import cv2
 import queue
 import time
 import os
+import sys
 from astropy.io import fits
 
 LC_WINDOW_SIZE = (550, 300)
@@ -46,8 +47,8 @@ class RollingBuffer:
         self.data_valid = np.zeros(limit, bool) # Start with every data set not being valid
 
         # The images are combined into "chunks" to reduce size in memory. A chunk is 1/50 of the full buffer.
-        chunk_limit = limit//50 + 1 # The number of images to stack into a chunk before adding the chunk to the buffer
-        self.current_chunk = np.zeros((chunk_limit, *image_size))
+        self.chunk_limit = limit//50 + 1 # The number of images to stack into a chunk before adding the chunk to the buffer
+        self.current_chunk = np.zeros((self.chunk_limit, *image_size))
         self.chunk_index = 0
         # No need to create a chunk_valid variable. Everything after the chunk index is invalid.
 
@@ -70,11 +71,14 @@ class RollingBuffer:
         # Loop the data index
         self.data_index = self.data_index % len(self.data)
 
+    def num(self):
+        return self.chunk_limit*np.sum(self.data_valid) + self.chunk_index
+
     def get(self):
         output = np.sum(self.data[self.data_valid], axis=0)
         if len(self.current_chunk) > 1:
             output += np.sum(self.current_chunk[:self.chunk_index], axis=0)
-        return output
+        return output / self.num()
 
     def clear(self):
         self.data_index = 0
@@ -122,7 +126,7 @@ def check_phase(phase, phase_range):
     if phase_range[0] < phase_range[1]:
         return (phase_range[0] < phase) and (phase < phase_range[1])
     else:
-        return (phase_range[0] > phase) or (phase > phase_range[1])
+        return (phase_range[0] < phase) or (phase < phase_range[1])
     
 def get_phase_duration(phase_range):
     """
@@ -141,6 +145,8 @@ class PhaseGUI(tk.Tk):
         self.roi_moved = None
         self.ranges_moved = None
         self.last_timestamp = None
+        self.range_lock = threading.Lock()
+        self.stretch_lock = threading.Lock()
 
         self.roi_center = None # Center of the ROI (pix)
         self.roi_width = None # Full width of the square ROI (pix)
@@ -162,7 +168,7 @@ class PhaseGUI(tk.Tk):
 
         # Set up GUI main frame
         self.title("Lightspeed Phasing GUI")
-        self.geometry("350x520")  # Adjust window size to tighten the layout
+        self.geometry("350x620") # Adjust window size to tighten the layout
         self.main_frame = tk.Frame(self)
         self.main_frame.pack(expand=True, fill='both', padx=10, pady=10)
         self.main_frame.grid_columnconfigure(0, weight=1)
@@ -184,7 +190,6 @@ class PhaseGUI(tk.Tk):
         self.freq_var = tk.DoubleVar()
         self.freq_var.set(29.545715652039586) # Crab
         # self.freq_var.set(19.616733064469113) # B0540
-        self.freq_var.trace_add("write", lambda *_: self.clear_data())
         self.freq_entry = Entry(ephemeris_frame, textvariable=self.freq_var)
         self.freq_entry.grid(row=1, column=1)
 
@@ -226,23 +231,39 @@ class PhaseGUI(tk.Tk):
         self.circular_roi_button = Checkbutton(lc_params_frame, variable=self.circular_roi_var, onvalue=1, offvalue=0)
         self.circular_roi_button.grid(row=4, column=1)
 
-        Label(lc_params_frame, text="Blur:").grid(row=5, column=0)
+        # LabelFrame for display parameters
+        lc_params_frame = LabelFrame(self.main_frame, text="Display parameters", padx=5, pady=5)
+        lc_params_frame.grid(row=2, column=0, sticky='nsew')
+
+        Label(lc_params_frame, text="Blur:").grid(row=0, column=0)
         self.blur_var = tk.DoubleVar()
         self.blur_var.set(0)
         self.blur_scale = Scale(lc_params_frame, from_=0, to_=6, resolution=0.1, length=150, variable=self.blur_var, orient=tk.HORIZONTAL)
-        self.blur_scale.grid(row=5, column=1)
+        self.blur_scale.grid(row=0, column=1)
+
+        Label(lc_params_frame, text="Min counts:").grid(row=1, column=0)
+        self.stretch_min_var = tk.IntVar()
+        self.stretch_min_var.set(-1)
+        self.buffer_size_entry = Entry(lc_params_frame, textvariable=self.stretch_min_var)
+        self.buffer_size_entry.grid(row=1, column=1)
+
+        Label(lc_params_frame, text="Max counts:").grid(row=2, column=0)
+        self.stretch_max_var = tk.IntVar()
+        self.stretch_max_var.set(-1)
+        self.buffer_size_entry = Entry(lc_params_frame, textvariable=self.stretch_max_var)
+        self.buffer_size_entry.grid(row=2, column=1)
 
         self.reset_image_button = Button(lc_params_frame, text="Reset images", command=self.clear_image)
-        self.reset_image_button.grid(row=6, column=0)
+        self.reset_image_button.grid(row=3, column=0)
         self.reset_lc_button = Button(lc_params_frame, text="Reset lightcurve", command=self.clear_lc)
-        self.reset_lc_button.grid(row=6, column=1)
+        self.reset_lc_button.grid(row=3, column=1)
 
         self.status_message = tk.Label(lc_params_frame, text="Initialized", justify=tk.LEFT, anchor="w", width=30)
-        self.status_message.grid(row=7, column=0, columnspan=2, sticky='nsew')
+        self.status_message.grid(row=4, column=0, columnspan=2, sticky='nsew')
 
         # Instructions
         lc_params_frame = LabelFrame(self.main_frame, text="Instructions", padx=5, pady=5)
-        lc_params_frame.grid(row=2, column=0, sticky='nsew')
+        lc_params_frame.grid(row=3, column=0, sticky='nsew')
         Label(lc_params_frame, text="Stretch the image with CTRL+click").grid(row=0, column=0)
         Label(lc_params_frame, text="Click in the image to set the lightcurve ROI").grid(row=1, column=0)
         Label(lc_params_frame, text="Then click and drag in the LC to set \"on\" range").grid(row=2, column=0)
@@ -260,8 +281,10 @@ class PhaseGUI(tk.Tk):
         self.update_frame_display()
 
     def on_close(self):
-        cv2.destroyAllWindows()
-        self.destroy()
+        with self.range_lock:
+            with self.stretch_lock:
+                cv2.destroyAllWindows()
+                self.destroy()
 
     def set_camera_data_from_camera_gui(self, camera_gui):
         """
@@ -304,19 +327,20 @@ class PhaseGUI(tk.Tk):
     def on_event_image(self, event, x, y, flags, param):
         left_down = (flags & cv2.EVENT_FLAG_LBUTTON)!=0
         control_down = (flags & cv2.EVENT_FLAG_CTRLKEY)!=0
-        if event == cv2.EVENT_LBUTTONDOWN or (event == cv2.EVENT_MOUSEMOVE and left_down):
-            if control_down:
-                self.stretch = [
-                    (x/(self.image_shape[1])),
-                    1-(y/(self.image_shape[0]*3+1+10))
-                ]
-            else:
-                # Place ROI
-                if y >= 0:
-                    self.roi_moved = (x, y % self.image_shape[0])
-        elif event == cv2.EVENT_RBUTTONDOWN and not control_down:
-            # Place marker
-            self.marker = (x, y % self.image_shape[0])
+        with self.stretch_lock:
+            if event == cv2.EVENT_LBUTTONDOWN or (event == cv2.EVENT_MOUSEMOVE and left_down):
+                if control_down:
+                    self.stretch = [
+                        (x/(self.image_shape[1])),
+                        1-(y/(self.image_shape[0]*3+1+10))
+                    ]
+                else:
+                    # Place ROI
+                    if y >= 0:
+                        self.roi_moved = (x, y % self.image_shape[0])
+            elif event == cv2.EVENT_RBUTTONDOWN and not control_down:
+                # Place marker
+                self.marker = (x, y % self.image_shape[0])
 
     def on_event_lc(self, event, x, y, flags, param):
         shift_down = (flags & cv2.EVENT_FLAG_SHIFTKEY)!=0
@@ -326,21 +350,22 @@ class PhaseGUI(tk.Tk):
         if 0 > mouse_phase or mouse_phase > 1:
             return
         
-        # The cursor is in a valid position. Begin to move the phase windows
-        if event == cv2.EVENT_LBUTTONDOWN:
-            # Begin drawing a new boundary
-            self.temporary_range = [mouse_phase, mouse_phase]
-        elif event == cv2.EVENT_MOUSEMOVE and left_down and self.temporary_range is not None:
-            self.temporary_range[1] = mouse_phase
-        elif event == cv2.EVENT_LBUTTONUP and self.temporary_range is not None:
-            self.temporary_range[1] = mouse_phase
-            if shift_down:
-                self.off_range = np.copy(self.temporary_range)
-            else:
-                self.on_range = np.copy(self.temporary_range)
-            if self.off_range is not None and self.on_range is not None:
-                self.ranges_moved = True
-            self.temporary_range = None
+        with self.range_lock:
+            # The cursor is in a valid position. Begin to move the phase windows
+            if event == cv2.EVENT_LBUTTONDOWN:
+                # Begin drawing a new boundary
+                self.temporary_range = [mouse_phase, mouse_phase]
+            elif event == cv2.EVENT_MOUSEMOVE and left_down and self.temporary_range is not None:
+                self.temporary_range[1] = mouse_phase
+            elif event == cv2.EVENT_LBUTTONUP and self.temporary_range is not None:
+                self.temporary_range[1] = mouse_phase
+                if shift_down:
+                    self.off_range = np.copy(self.temporary_range)
+                else:
+                    self.on_range = np.copy(self.temporary_range)
+                if self.off_range is not None and self.on_range is not None:
+                    self.ranges_moved = True
+                self.temporary_range = None
 
     def extend_buffers(self):
         buffer_frame_size = self.get_buffer_size()
@@ -359,7 +384,7 @@ class PhaseGUI(tk.Tk):
         """
         pepoch = get_tk_value(self.pepoch_var)
         freq = get_tk_value(self.freq_var)
-        if freq <= 0 or np.isnan(freq): return 1e-5
+        if freq <= 0 or np.isnan(freq): None
         delta_time = self.t_start + timestamp - pepoch * 3600 * 24
         phase = delta_time * freq
         phase -= np.floor(phase)
@@ -414,18 +439,23 @@ class PhaseGUI(tk.Tk):
 
         # Add to the LC
         phase = self.get_phase(timestamp)
+        if phase is None:
+            return # Frequency is invalid
         lc = np.zeros(len(self.lc_phase_bin_edges)-1)
         lc[np.digitize(phase, self.lc_phase_bin_edges)-1] = flux
         self.lc_fluxes.push(lc)
 
     def process_image(self, data, timestamp):
         self.total_image.push(data)
-        if self.on_range is not None and self.off_range is not None:
-            phase = self.get_phase(timestamp)
-            if check_phase(phase, self.on_range):
-                self.on_image.push(data)
-            if check_phase(phase, self.off_range):
-                self.off_image.push(data)
+        with self.range_lock:
+            if self.on_range is not None and self.off_range is not None:
+                phase = self.get_phase(timestamp)
+                if phase is None:
+                    return # Frequency is invalid
+                if check_phase(phase, self.on_range):
+                    self.on_image.push(data)
+                if check_phase(phase, self.off_range):
+                    self.off_image.push(data)
 
     def display_lc(self):
         if self.roi_center is None:
@@ -450,12 +480,13 @@ class PhaseGUI(tk.Tk):
         image = np.zeros((LC_WINDOW_SIZE[1], LC_WINDOW_SIZE[0], 3), np.uint8)
 
         # Show spans
-        show_span(image, self.off_range, (0, 128, 255))
-        show_span(image, self.on_range, (255,128,128))
-        show_span(image, self.temporary_range, (128,128,128))
-        cv2.rectangle(image, (LC_WINDOW_SIZE[0]-60,22), (LC_WINDOW_SIZE[0]-5,5), (0,0,0), -1)
-        cv2.putText(image, 'Off', (LC_WINDOW_SIZE[0]-30,20), cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 128, 255), 1, cv2.LINE_AA)
-        cv2.putText(image, 'On', (LC_WINDOW_SIZE[0]-60,20), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255,128,128), 1, cv2.LINE_AA)
+        with self.range_lock:
+            show_span(image, self.off_range, (0, 128, 255))
+            show_span(image, self.on_range, (255,128,128))
+            show_span(image, self.temporary_range, (128,128,128))
+            cv2.rectangle(image, (LC_WINDOW_SIZE[0]-60,22), (LC_WINDOW_SIZE[0]-5,5), (0,0,0), -1)
+            cv2.putText(image, 'Off', (LC_WINDOW_SIZE[0]-30,20), cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 128, 255), 1, cv2.LINE_AA)
+            cv2.putText(image, 'On', (LC_WINDOW_SIZE[0]-60,20), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255,128,128), 1, cv2.LINE_AA)
 
         hist_pts = []
         for i, flux in enumerate(lc_fluxes):
@@ -521,7 +552,8 @@ class PhaseGUI(tk.Tk):
                 scaled_image = convolve(scaled_image, gauss, mode="same")
 
         # Stretch
-        scaled_image = np.exp(STRETCH_SEVERITY*(0.5-self.stretch[1])) * (scaled_image - self.stretch[0]) + self.stretch[0]
+        with self.stretch_lock:
+            scaled_image = np.exp(STRETCH_SEVERITY*(0.5-self.stretch[1])) * (scaled_image - self.stretch[0]) + self.stretch[0]
 
         # Prepare for drawing
         scaled_image[~np.isfinite(scaled_image)] = 0
@@ -558,30 +590,35 @@ class PhaseGUI(tk.Tk):
             self.off_window_created = True
 
         total_image = self.total_image.get().astype(float)
-        vmin = np.min(total_image)
-        vmax = np.max(total_image)
+        vmin = get_tk_value(self.stretch_min_var)
+        if vmin == -1:
+            vmin = np.min(total_image)
+        vmax = get_tk_value(self.stretch_max_var)
+        if vmax == -1:
+            vmax = np.max(total_image)
         merged_image = np.zeros((3*self.image_shape[0]+1+10, self.image_shape[1], 3), np.uint8)
 
         stretched_total = self.apply_stretch(total_image, vmin, vmax)
         merged_image[:self.image_shape[0], :, :] = stretched_total
 
         # Add the difference image
-        if self.on_range is not None and self.off_range is not None:
-            on_image = self.on_image.get().astype(float)
-            off_image = self.off_image.get().astype(float)
-            difference_image = on_image / get_phase_duration(self.on_range) - off_image / get_phase_duration(self.off_range)
-            vmin = np.min(difference_image)
-            vmax = np.max(difference_image)
-            stretched_difference = self.apply_stretch(difference_image, vmin, vmax)
-            merged_image[self.image_shape[0]+1:2*self.image_shape[0]+1,:, :] = stretched_difference
+        with self.range_lock:
+            if self.on_range is not None and self.off_range is not None:
+                on_image = self.on_image.get().astype(float)
+                off_image = self.off_image.get().astype(float)
+                difference_image = on_image / get_phase_duration(self.on_range) - off_image / get_phase_duration(self.off_range)
+                vmin = np.min(difference_image)
+                vmax = np.max(difference_image)
+                stretched_difference = self.apply_stretch(difference_image, vmin, vmax)
+                merged_image[self.image_shape[0]+1:2*self.image_shape[0]+1,:, :] = stretched_difference
 
-            if np.sum(on_image) == 0:
-                snr_metric = 0
-            else:
-                mean_difference_image_flux = np.mean(difference_image[~self.roi_mask])
-                mean_roi_difference = np.mean(difference_image[self.roi_mask]) - mean_difference_image_flux
-                variance_of_background = np.var(difference_image[~self.roi_mask])
-                snr_metric = mean_roi_difference**2 / variance_of_background
+                if np.sum(on_image) == 0:
+                    snr_metric = 0
+                else:
+                    mean_difference_image_flux = np.mean(difference_image[~self.roi_mask])
+                    mean_roi_difference = np.mean(difference_image[self.roi_mask]) - mean_difference_image_flux
+                    variance_of_background = np.var(difference_image[~self.roi_mask])
+                    snr_metric = mean_roi_difference**2 / variance_of_background
 
         # Add the colorbar
         colorbar = np.zeros((10, self.image_shape[1]))
@@ -595,10 +632,11 @@ class PhaseGUI(tk.Tk):
         cv2.line(merged_image, (0, 2*self.image_shape[0]+1), (self.image_shape[1], 2*self.image_shape[0]+1), (255,0,255))
         cv2.line(merged_image, (0, 2*self.image_shape[0]+11), (self.image_shape[1], 2*self.image_shape[0]+11), (255,0,255))
 
-        if self.on_range is None or self.off_range is None:
-            cv2.putText(merged_image, "N/A", (self.image_shape[1]//2-18,3*self.image_shape[0]//2+5), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
-        else:
-            cv2.putText(merged_image, f"SNR: {snr_metric:.1f}", (self.image_shape[1]//2-40,5*self.image_shape[0]//2+11+10), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
+        with self.range_lock:
+            if self.on_range is None or self.off_range is None:
+                cv2.putText(merged_image, "N/A", (self.image_shape[1]//2-18,3*self.image_shape[0]//2+5), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
+            else:
+                cv2.putText(merged_image, f"SNR: {snr_metric:.1f}", (self.image_shape[1]//2-40,5*self.image_shape[0]//2+11+10), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
 
         cv2.imshow("Image", merged_image)
         cv2.waitKey(1)
@@ -606,24 +644,22 @@ class PhaseGUI(tk.Tk):
 
     def update_frame_display(self):
         # Update the status message
-        if self.roi_center is None:
-            self.status_message.config(text="No ROI has been set", fg="red")
-        elif self.on_range is None or self.off_range is None:
-            self.status_message.config(text="No on / off phase ranges have been set", fg="red")
-        else:
-            self.status_message.config(text="Running", fg="white")
+        with self.range_lock:
+            if self.roi_center is None:
+                self.status_message.config(text="No ROI has been set", fg="red")
+            elif self.on_range is None or self.off_range is None:
+                self.status_message.config(text="No on / off phase ranges have been set", fg="red")
+            else:
+                self.status_message.config(text="Running", fg="white")
 
         # Check to see if a callback triggered an action
-        if self.roi_moved is not None:
-            if get_tk_value(self.lock_roi_var) == 0:
-                # ROI is not locked
-                self.roi_center = (self.roi_moved[0], self.roi_moved[1])
-                self.make_roi_mask()
-                self.clear_lc()
-                if self.on_range is not None and self.off_range is not None:
-                    # Clear the images only if they were on-off folded
-                    self.clear_image()
-            self.roi_moved = None
+        with self.stretch_lock:
+            if self.roi_moved is not None:
+                if get_tk_value(self.lock_roi_var) == 0:
+                    # ROI is not locked
+                    self.roi_center = (self.roi_moved[0], self.roi_moved[1])
+                    self.make_roi_mask()
+                self.roi_moved = None
 
         if self.ranges_moved:
             self.clear_image()
@@ -666,6 +702,7 @@ class SavedDataThread(threading.Thread):
         super().__init__()
         self.frame_queue = frame_queue
         self.timestamp_queue = timestamp_queue
+        self.save_directory = "../captures"
 
         if day_string is None:
             day_string = datetime.date.today().strftime("%Y%m%d")
@@ -675,7 +712,7 @@ class SavedDataThread(threading.Thread):
 
         if time_string is None:
             time_string = None
-            for f in os.listdir("../captures"):
+            for f in os.listdir(self.save_directory):
                 if not f.startswith(f"{object_name}_{day_string}"):
                     continue
                 if not f.endswith(f"cube{start_index:03d}.fits"):
@@ -685,13 +722,13 @@ class SavedDataThread(threading.Thread):
                 if time_string is None or int(this_file_time_string) > int(time_string):
                     time_string = this_file_time_string
         if time_string is None:
-            raise Exception(f"Could not find any cubes for object {object_name} at time {day_string} with index {start_index}")
+            raise Exception(f"Could not find any cubes for object {object_name} at day {day_string} with index {start_index}")
 
         self.object_name = object_name
         self.day_string = day_string
         self.time_string = time_string
         self.start_index = start_index
-        self.start_filename = f"../captures/{self.object_name}_{self.day_string}_{self.time_string}_cube{self.start_index:03d}.fits"
+        self.start_filename = f"{self.save_directory}/{self.object_name}_{self.day_string}_{self.time_string}_cube{self.start_index:03d}.fits"
 
     def run(self):
         threading.Thread(target=self.submit_to_queue, daemon=True).start()
@@ -699,7 +736,7 @@ class SavedDataThread(threading.Thread):
     def submit_to_queue(self):
         # Read in all files
         for cube_index in range(self.start_index, 1_000_000):
-            filename = f"../captures/{self.object_name}_{self.day_string}_{self.time_string}_cube{cube_index:03d}.fits"
+            filename = f"{self.save_directory}/{self.object_name}_{self.day_string}_{self.time_string}_cube{cube_index:03d}.fits"
 
             # Check if filename exists
             for _ in range(20):
@@ -727,6 +764,7 @@ class SavedDataThread(threading.Thread):
                 self.frame_queue.put_nowait(frame)
                 self.timestamp_queue.put_nowait(timestamp)
             print("File completed")
+        self.submit_to_queue() # TODO
 
 if __name__ == "__main__":
     # Create shared queues containing the data coming from the camera / saved data.
@@ -735,9 +773,11 @@ if __name__ == "__main__":
     timestamp_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
 
     # Create the thread to feed the GUI data from a FITS file.
-    
-    # test_thread = SavedDataThread("crab1000", frame_queue, timestamp_queue, day_string="20241026", start_index=66)
-    test_thread = SavedDataThread("crab_0", frame_queue, timestamp_queue)
+    source_name = "crab_0"
+    if len(sys.argv) > 1:
+        source_name = sys.argv[1]
+        print(f"Reading name `{source_name}` from command line arguments")
+    test_thread = SavedDataThread(source_name, frame_queue, timestamp_queue, day_string="20250912")
     test_thread.start()
 
     # Create the gui
