@@ -677,11 +677,20 @@ class PhaseGUI(tk.Tk):
         cv2.line(merged_image, (0, 2*self.image_shape[0]+1), (self.image_shape[1], 2*self.image_shape[0]+1), (255,0,255))
         cv2.line(merged_image, (0, 2*self.image_shape[0]+11), (self.image_shape[1], 2*self.image_shape[0]+11), (255,0,255))
 
+        if self.roi_center is not None:
+            cv2.putText(merged_image, f"ROI: ({self.roi_center[0]}, {self.roi_center[1]})",
+                (self.image_shape[1]//2-60, 3*self.image_shape[0]//2+11-10),
+                cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
+
         with self.range_lock:
             if self.on_range is None or self.off_range is None:
-                cv2.putText(merged_image, "N/A", (self.image_shape[1]//2-18,3*self.image_shape[0]//2+5), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
+                cv2.putText(merged_image, "N/A",
+                    (self.image_shape[1]//2-18, 3*self.image_shape[0]//2+11+10),
+                    cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
             else:
-                cv2.putText(merged_image, f"SNR: {snr_metric:.1f}", (self.image_shape[1]//2-40,5*self.image_shape[0]//2+11+10), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
+                cv2.putText(merged_image, f"SNR: {snr_metric:.1f}",
+                    (self.image_shape[1]//2-40, 5*self.image_shape[0]//2+11+10),
+                    cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
 
         cv2.imshow("Image", merged_image)
         cv2.waitKey(1)
