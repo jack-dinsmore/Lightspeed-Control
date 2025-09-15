@@ -168,7 +168,6 @@ class PhaseGUI(tk.Tk):
         self.frame_queue = frame_queue
         self.timestamp_queue = timestamp_queue
         self.roi_moved = None
-        self.ranges_moved = None
         self.last_timestamp = None
         self.range_lock = threading.Lock()
         self.stretch_lock = threading.Lock()
@@ -215,7 +214,8 @@ class PhaseGUI(tk.Tk):
         Label(ephemeris_frame, text="Frequency (Hz):").grid(row=1, column=0)
         self.freq_var = tk.DoubleVar()
         # self.freq_var.set(29.545715652039586) # Crab
-        self.freq_var.set(19.616666882767845) # B0540
+        # self.freq_var.set(19.616733064469113) # B0540 on September 13
+        self.freq_var.set(19.616666882767845) # B0540 on September 15
         self.freq_entry = Entry(ephemeris_frame, textvariable=self.freq_var)
         self.freq_entry.grid(row=1, column=1)
 
@@ -232,8 +232,7 @@ class PhaseGUI(tk.Tk):
 
         Label(lc_params_frame, text="# Buffer size:").grid(row=1, column=0)
         self.buffer_size_var = tk.IntVar()
-        # self.buffer_size_var.set(200_000)
-        self.buffer_size_var.set(60_000) # TODO
+        self.buffer_size_var.set(200_000)
         self.buffer_size_var.trace_add("write", lambda *_: self.extend_buffers())
         self.buffer_size_entry = Entry(lc_params_frame, textvariable=self.buffer_size_var)
         self.buffer_size_entry.grid(row=1, column=1)
@@ -241,7 +240,6 @@ class PhaseGUI(tk.Tk):
         Label(lc_params_frame, text="ROI width (px):").grid(row=2, column=0)
         self.width_var = tk.IntVar()
         self.width_var.set(24)
-        self.width_var.trace_add("write", lambda *_: self.clear_lc())
         self.width_entry = Entry(lc_params_frame, textvariable=self.width_var)
         self.width_entry.grid(row=2, column=1)
 
@@ -340,10 +338,8 @@ class PhaseGUI(tk.Tk):
             except:
                 start_time = Time("2025-09-13 00:00:00", scale="utc")
             frame_shape = hdul[1].data[0].shape
-            try:
-                self.n_framebundle = int(hdul[1].header["HIERARCH FRAMEBUNDLE NUMBER"])
-            except:
-                self.n_framebundle = 100
+            self.n_framebundle = int(hdul[1].header["HIERARCH FRAMEBUNDLE NUMBER"])
+            self.upper_left = int(hdul[1].header["HIERARCH SUBARRAY HPOS"]), int(hdul[1].header["HIERARCH SUBARRAY VPOS"])
 
         self.image_shape = (frame_shape[0]//self.n_framebundle, frame_shape[1])
 
@@ -403,8 +399,6 @@ class PhaseGUI(tk.Tk):
                     self.off_range = np.copy(self.temporary_range)
                 else:
                     self.on_range = np.copy(self.temporary_range)
-                if self.off_range is not None and self.on_range is not None:
-                    self.ranges_moved = True
                 self.temporary_range = None
 
     def extend_buffers(self):
@@ -678,16 +672,12 @@ class PhaseGUI(tk.Tk):
         cv2.line(merged_image, (0, 2*self.image_shape[0]+11), (self.image_shape[1], 2*self.image_shape[0]+11), (255,0,255))
 
         if self.roi_center is not None:
-            cv2.putText(merged_image, f"ROI: ({self.roi_center[0]}, {self.roi_center[1]})",
-                (self.image_shape[1]//2-60, 3*self.image_shape[0]//2+11-10),
+            cv2.putText(merged_image, f"ROI: ({self.roi_center[0]+self.upper_left[0]}, {self.roi_center[1]+self.upper_left[1]})",
+                (self.image_shape[1]//2-60, 5*self.image_shape[0]//2+11-10),
                 cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
 
         with self.range_lock:
-            if self.on_range is None or self.off_range is None:
-                cv2.putText(merged_image, "N/A",
-                    (self.image_shape[1]//2-18, 3*self.image_shape[0]//2+11+10),
-                    cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
-            else:
+            if self.on_range is not None and self.off_range is not None:
                 cv2.putText(merged_image, f"SNR: {snr_metric:.1f}",
                     (self.image_shape[1]//2-40, 5*self.image_shape[0]//2+11+10),
                     cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 255), 1, cv2.LINE_AA)
@@ -714,10 +704,6 @@ class PhaseGUI(tk.Tk):
                     self.roi_center = (self.roi_moved[0], self.roi_moved[1])
                     self.make_roi_mask()
                 self.roi_moved = None
-
-        if self.ranges_moved:
-            self.clear_image()
-            self.ranges_moved = False
         
         # Process everything in the queue 
         while not self.frame_queue.empty():
@@ -762,6 +748,7 @@ class SavedDataThread(threading.Thread):
         self.frame_queue = frame_queue
         self.timestamp_queue = timestamp_queue
         self.save_directory = "../captures"
+        # self.save_directory = "/??/Lightspeed-Control/captures/2025-09-14"
 
         if day_string is None:
             day_string = datetime.date.today().strftime("%Y%m%d")
@@ -837,27 +824,22 @@ if __name__ == "__main__":
     timestamp_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
 
     # Create the thread to feed the GUI data from a FITS file.
-    if len(sys.argv) > 1:
-        source_name = sys.argv[1]
-        time_string = None
-        day_string = None
-        start_index = None
-        print(f"Reading name `{source_name}` from command line arguments")
-        if len(sys.argv) > 2:
-            day_string = sys.argv[2]
-            print(f"Reading day string `{day_string}` from command line arguments")
-        if len(sys.argv) > 3:
-            time_string = sys.argv[3]
-            print(f"Reading time string `{time_string}` from command line arguments")
-        if len(sys.argv) > 4:
-            start_index = int(sys.argv[4])
-            print(f"Reading start index `{start_index}` from command line arguments")
-    else:
-        print("No command line arguments were found. Loading test dataset.")
-        source_name = "crab_0"
-        day_string="20250912"
-        time_string=None
-        start_index = None
+    if len(sys.argv) == 1:
+        raise Exception("Please pass the source name as a command line argument")
+    source_name = sys.argv[1]
+    time_string = None
+    day_string = None
+    start_index = None
+    print(f"Reading name `{source_name}` from command line arguments")
+    if len(sys.argv) > 2:
+        day_string = sys.argv[2]
+        print(f"Reading day string `{day_string}` from command line arguments")
+    if len(sys.argv) > 3:
+        time_string = sys.argv[3]
+        print(f"Reading time string `{time_string}` from command line arguments")
+    if len(sys.argv) > 4:
+        start_index = int(sys.argv[4])
+        print(f"Reading start index `{start_index}` from command line arguments")
     test_thread = SavedDataThread(source_name, frame_queue, timestamp_queue, time_string=time_string, day_string=day_string, start_index=start_index)
     test_thread.start()
 
