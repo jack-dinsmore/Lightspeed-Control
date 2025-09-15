@@ -5,6 +5,8 @@ from tkinter import Label, Entry, Button, Scale, LabelFrame, Checkbutton
 import threading
 import datetime
 from astropy.time import Time
+from astropy.coordinates import SkyCoord, EarthLocation
+import astropy.units as u
 import cv2
 import queue
 import time
@@ -16,6 +18,29 @@ LC_WINDOW_SIZE = (550, 300)
 LC_LEFT_BOUND = 50 # left bound of the plot
 LC_LOWER_BOUND = LC_WINDOW_SIZE[1]-40 # Lower bound of the plot
 STRETCH_SEVERITY=10
+
+class ImageCorrector:
+    def __init__(self, image_shape, median_cut=3, max_wavelength=2):
+        sigma = max_wavelength / 0.05
+        width = int(np.ceil(3 * sigma))
+        line = np.arange(-width, width+1) / sigma # Units of sigma
+        self.kernel = np.sin(2*np.pi*line) / line
+        self.kernel[line==0] = 1
+        self.kernel /= np.sum(self.kernel)
+        self.flat = convolve(np.ones(image_shape[1]), self.kernel, mode="same")
+        self.median_cut = median_cut
+        self.max_wavelength = max_wavelength
+
+    def correct(self, image):
+        # Median cut
+        image_median = np.median(image)
+        image[np.abs(image - image_median) > self.median_cut] = image_median
+
+        # High pass filter
+        median_profile = np.median(image, axis=0)
+        median_profile -= convolve(median_profile, self.kernel, mode="same") / self.flat
+
+        return image - median_profile
 
 def show_span(image, r, color):
     plot_width = LC_WINDOW_SIZE[0] - LC_LEFT_BOUND
@@ -78,8 +103,8 @@ class RollingBuffer:
         output = np.sum(self.data[self.data_valid], axis=0)
         if len(self.current_chunk) > 1:
             output += np.sum(self.current_chunk[:self.chunk_index], axis=0)
-        return output / self.num()
-
+        return output.astype(float) / max(1, self.num())
+    
     def clear(self):
         self.data_index = 0
         self.data_valid &= False # Set all data to invalid
@@ -147,6 +172,7 @@ class PhaseGUI(tk.Tk):
         self.last_timestamp = None
         self.range_lock = threading.Lock()
         self.stretch_lock = threading.Lock()
+        self.frame_index = 0
 
         self.roi_center = None # Center of the ROI (pix)
         self.roi_width = None # Full width of the square ROI (pix)
@@ -188,8 +214,8 @@ class PhaseGUI(tk.Tk):
 
         Label(ephemeris_frame, text="Frequency (Hz):").grid(row=1, column=0)
         self.freq_var = tk.DoubleVar()
-        self.freq_var.set(29.545715652039586) # Crab
-        # self.freq_var.set(19.616733064469113) # B0540
+        # self.freq_var.set(29.545715652039586) # Crab
+        self.freq_var.set(19.616733064469113) # B0540
         self.freq_entry = Entry(ephemeris_frame, textvariable=self.freq_var)
         self.freq_entry.grid(row=1, column=1)
 
@@ -206,7 +232,8 @@ class PhaseGUI(tk.Tk):
 
         Label(lc_params_frame, text="# Buffer size:").grid(row=1, column=0)
         self.buffer_size_var = tk.IntVar()
-        self.buffer_size_var.set(500)
+        # self.buffer_size_var.set(200_000)
+        self.buffer_size_var.set(60_000) # TODO
         self.buffer_size_var.trace_add("write", lambda *_: self.extend_buffers())
         self.buffer_size_entry = Entry(lc_params_frame, textvariable=self.buffer_size_var)
         self.buffer_size_entry.grid(row=1, column=1)
@@ -277,6 +304,7 @@ class PhaseGUI(tk.Tk):
         else:
             self.set_camera_data_from_camera_gui(feed)
         
+        self.image_corrector = ImageCorrector(self.image_shape)
         self.clear_data()
         self.update_frame_display()
 
@@ -300,19 +328,31 @@ class PhaseGUI(tk.Tk):
         """
         with fits.open(saved_data_feed.start_filename) as hdul:
             # Get the start time of the observation in MJD
+
+            sky_coord = SkyCoord(
+                ra=hdul[1].header["TELRA"],
+                dec=hdul[1].header["TELDEC"],
+                unit=(u.hourangle, u.deg),
+                frame="icrs"
+            )
             try:
-                start_time = hdul[0].header["GPSSTART"]
-                mjd = Time(start_time).jd - 2400000.5
+                start_time = Time(hdul[0].header["GPSSTART"])
             except:
-                mjd = 0
+                start_time = Time("2025-09-13 00:00:00", scale="utc")
             frame_shape = hdul[1].data[0].shape
             try:
                 self.n_framebundle = int(hdul[1].header["HIERARCH FRAMEBUNDLE NUMBER"])
             except:
                 self.n_framebundle = 100
 
-        self.t_start = mjd * 3600 * 24 # Time at which the camera started observing (seconds)
         self.image_shape = (frame_shape[0]//self.n_framebundle, frame_shape[1])
+
+        # Barycentric correction of start time
+        start_ltt_bary = start_time.light_travel_time(sky_coord, location=EarthLocation.of_site('LCO'))
+        start_plus_one_ltt_bary = (start_time+1*u.s).light_travel_time(sky_coord, location=EarthLocation.of_site('LCO'))
+        self.t_start = start_time.mjd *(3600*24) + start_ltt_bary.to(u.s).value
+        ltt_derivative = (start_plus_one_ltt_bary - start_ltt_bary).to(u.s).value # Seconds per second
+        self.time_dilation_factor = 1 + ltt_derivative
 
     def update_batch_size(self, batch_size):
         self.n_framebundle = batch_size # TODO check that this is right.
@@ -385,7 +425,7 @@ class PhaseGUI(tk.Tk):
         pepoch = get_tk_value(self.pepoch_var)
         freq = get_tk_value(self.freq_var)
         if freq <= 0 or np.isnan(freq): None
-        delta_time = self.t_start + timestamp - pepoch * 3600 * 24
+        delta_time = timestamp - pepoch * 3600 * 24
         phase = delta_time * freq
         phase -= np.floor(phase)
         return phase
@@ -469,7 +509,7 @@ class PhaseGUI(tk.Tk):
 
         plot_width = LC_WINDOW_SIZE[0]-LC_LEFT_BOUND # left bound of the plot
         lc_fluxes = self.lc_fluxes.get()
-        lc_errorbar = np.sqrt(lc_fluxes + 1e-5)
+        lc_errorbar = np.sqrt(lc_fluxes/self.lc_fluxes.num() + 1e-5)
         if np.mean(lc_fluxes) > 0:
             lc_errorbar /= np.mean(lc_fluxes)
             lc_fluxes /= np.mean(lc_fluxes)
@@ -549,7 +589,8 @@ class PhaseGUI(tk.Tk):
                 xs, ys = np.meshgrid(line,line)
                 gauss = np.exp(-(xs**2 + ys**2) / (2*blur_scale**2))
                 gauss /= np.sum(gauss)
-                scaled_image = convolve(scaled_image, gauss, mode="same")
+                flat = convolve(np.ones_like(scaled_image), gauss, mode="same")
+                scaled_image = convolve(scaled_image, gauss, mode="same") / flat
 
         # Stretch
         with self.stretch_lock:
@@ -589,16 +630,20 @@ class PhaseGUI(tk.Tk):
             cv2.setMouseCallback('Image', self.on_event_image)
             self.off_window_created = True
 
-        total_image = self.total_image.get().astype(float)
-        vmin = get_tk_value(self.stretch_min_var)
-        if vmin == -1:
-            vmin = np.min(total_image)
-        vmax = get_tk_value(self.stretch_max_var)
-        if vmax == -1:
-            vmax = np.max(total_image)
         merged_image = np.zeros((3*self.image_shape[0]+1+10, self.image_shape[1], 3), np.uint8)
 
-        stretched_total = self.apply_stretch(total_image, vmin, vmax)
+        # Refresh the total image
+        if self.frame_index == 0:
+            self.display_total_image = self.image_corrector.correct(self.total_image.get().astype(float))
+        self.frame_index = (self.frame_index + 1) % 10
+        
+        vmin = get_tk_value(self.stretch_min_var)
+        if vmin == -1:
+            vmin = np.min(self.display_total_image)
+        vmax = get_tk_value(self.stretch_max_var)
+        if vmax == -1:
+            vmax = np.max(self.display_total_image)
+        stretched_total = self.apply_stretch(self.display_total_image, vmin, vmax)
         merged_image[:self.image_shape[0], :, :] = stretched_total
 
         # Add the difference image
@@ -669,6 +714,7 @@ class PhaseGUI(tk.Tk):
         while not self.frame_queue.empty():
             frame = self.frame_queue.get_nowait()
             timestamp = self.timestamp_queue.get_nowait()
+
             if self.last_timestamp is None:
                 self.last_timestamp = timestamp
                 continue
@@ -676,8 +722,12 @@ class PhaseGUI(tk.Tk):
             slice_width = frame.shape[0] // self.n_framebundle # Width of each slice in pixels
             stripped_image = frame.reshape(-1, slice_width, frame.shape[1]).astype(np.uint32)
             for (strip_index, strip) in enumerate(stripped_image):
-                self.process_lc(strip, timestamp + strip_index*delta_t)
-                self.process_image(strip, timestamp + strip_index*delta_t)
+                # Barycenter correct timestamp
+                time_since_start = timestamp + strip_index*delta_t
+                frame_time = self.t_start + time_since_start*self.time_dilation_factor
+                
+                self.process_lc(strip, frame_time)
+                self.process_image(strip, frame_time)
             self.last_timestamp = timestamp
 
         # Display the data
@@ -758,23 +808,31 @@ class SavedDataThread(threading.Thread):
             for frame, timestamp in zip(frames, timestamps):
                 desired_time = (timestamp - timestamps[0]) + start
                 time.sleep(max(desired_time - time.time(), 0)) # Sleep until the next frame is due
-                if self.frame_queue.full():
+                try:
+                    self.frame_queue.put_nowait(frame)
+                    self.timestamp_queue.put_nowait(timestamp)
+                except:
                     self.frame_queue.get_nowait()
                     self.timestamp_queue.get_nowait()
-                self.frame_queue.put_nowait(frame)
-                self.timestamp_queue.put_nowait(timestamp)
+                    self.frame_queue.put_nowait(frame)
+                    self.timestamp_queue.put_nowait(timestamp)
+
+        # if self.start_index == 1:
+        #     self.start_index = 290
+        #     self.submit_to_queue()
 
 if __name__ == "__main__":
     # Create shared queues containing the data coming from the camera / saved data.
-    QUEUE_MAXSIZE = 8
+    QUEUE_MAXSIZE = 16
     frame_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
     timestamp_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
 
     # Create the thread to feed the GUI data from a FITS file.
     if len(sys.argv) > 1:
         source_name = sys.argv[1]
-        time_string=None
+        time_string = None
         day_string = None
+        start_index = None
         print(f"Reading name `{source_name}` from command line arguments")
         if len(sys.argv) > 2:
             day_string = sys.argv[2]
@@ -782,12 +840,16 @@ if __name__ == "__main__":
         if len(sys.argv) > 3:
             time_string = sys.argv[3]
             print(f"Reading time string `{time_string}` from command line arguments")
+        if len(sys.argv) > 4:
+            start_index = int(sys.argv[4])
+            print(f"Reading start index `{start_index}` from command line arguments")
     else:
         print("No command line arguments were found. Loading test dataset.")
         source_name = "crab_0"
         day_string="20250912"
         time_string=None
-    test_thread = SavedDataThread(source_name, frame_queue, timestamp_queue, time_string=time_string, day_string=day_string)
+        start_index = None
+    test_thread = SavedDataThread(source_name, frame_queue, timestamp_queue, time_string=time_string, day_string=day_string, start_index=start_index)
     test_thread.start()
 
     # Create the gui
