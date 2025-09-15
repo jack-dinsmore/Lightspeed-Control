@@ -215,7 +215,7 @@ class PhaseGUI(tk.Tk):
         Label(ephemeris_frame, text="Frequency (Hz):").grid(row=1, column=0)
         self.freq_var = tk.DoubleVar()
         # self.freq_var.set(29.545715652039586) # Crab
-        self.freq_var.set(19.616733064469113) # B0540
+        self.freq_var.set(19.616666882767845) # B0540
         self.freq_entry = Entry(ephemeris_frame, textvariable=self.freq_var)
         self.freq_entry.grid(row=1, column=1)
 
